@@ -1,0 +1,76 @@
+---
+description: getting the ap structurea and understanding the application
+globs: 
+alwaysApply: false
+---
+
+# Your rule content
+
+- You can @ files here
+- You can use markdown but dont have to
+# Description: A barter system mobile app enabling users to swipe and trade products without monetary transactions.
+# The app leverages Expo (React Native with TypeScript) for the front end and Supabase for the backend.
+
+[project]
+name = "Barter App"
+description = "A mobile barter system where users can swipe to discover items and propose trades. No money involved!"
+date = "2025-02-25"
+
+[platform]
+framework = "Expo (React Native)"
+language = "TypeScript"
+
+[backend]
+provider = "Supabase"
+database = "PostgreSQL"
+auth_method = "JWT (Supabase Auth)"
+# Use Supabase’s real-time and storage features for item management and messaging.
+
+[features]
+swipe_mechanism = true        # Tinder-like swiping for item discovery.
+item_management = true        # Add, edit, and delete user items.
+trade_proposals = true        # Propose, accept, or reject trade offers.
+messaging_system = true       # In-app chat for communication between users.
+user_authentication = true    # Secure login/registration with Expo SecureStore.
+
+[ui]
+navigation = "react-navigation (Bottom Tabs)"
+screens = ["Home", "My Items", "Trade Proposals", "Profile"]
+swipe_component = "react-native-tinder-swipe"
+detail_screen = "Item Detail with trade proposal options"
+
+[dependencies]
+expo = "latest"
+react = "latest"
+react-native = "latest"
+"@react-navigation/native" = "latest"
+supabase_js = "latest"
+"expo-image-picker" = "latest"
+"expo-secure-store" = "latest"
+"react-native-tinder-swipe" = "latest"
+"react-native-gifted-chat" = "latest"
+
+[code_standards]
+linting = "ESLint"
+formatting = "Prettier"
+testing = "Jest and/or Detox for end-to-end testing"
+modularity = "Ensure components are modular and maintainable"
+
+[security]
+token_storage = "Expo SecureStore"
+data_encryption = "JWT-based authentication"
+verification = "Email or Phone verification required"
+privacy = "Follow best practices for user data protection"
+
+[deployment]
+build_service = "Expo build service"
+target_stores = ["Apple App Store", "Google Play Store"]
+performance = "Optimize for responsiveness and cross-platform compatibility"
+
+[notes]
+# Additional Guidelines:
+# - Structure the project to separate UI components, business logic, and API interactions.
+# - Leverage Supabase’s realtime capabilities for chat and notifications.
+# - Ensure intuitive UX with a swipeable Home screen and clear navigation between sections.
+# - Incorporate user feedback loops (ratings and reviews) after successful trades.
+# - Maintain scalability and security as top priorities.
