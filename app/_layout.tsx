@@ -19,6 +19,8 @@ export default function RootLayout() {
     <AuthProvider>
       <ToastProvider>
         <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="index" />
+          <Stack.Screen name="splash" />
           <Stack.Screen name="welcome" />
           <Stack.Screen name="onboarding" />
           <Stack.Screen name="(tabs)" />
@@ -33,6 +35,7 @@ export default function RootLayout() {
           <Stack.Screen name="help-support" options={{ headerShown: false }} />
           <Stack.Screen name="chat-selection" options={{ headerShown: false }} />
           <Stack.Screen name="chat" options={{ headerShown: false }} />
+          <Stack.Screen name="item-details" options={{ headerShown: false }} />
         </Stack>
         <StatusBar style="auto" />
       </ToastProvider>

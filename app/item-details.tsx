@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, FlatList, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, FlatList, Alert, Modal } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { Image as ExpoImage } from 'expo-image';
-import { ArrowLeft, ChevronLeft, ChevronRight, MessageCircle, Play } from 'lucide-react-native';
+import { ArrowLeft, ChevronLeft, ChevronRight, MessageCircle, Play, Repeat, LucidePackage, Star, Award } from 'lucide-react-native';
 import { getSupabaseFileUrl } from '../services/imageservice';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { chatService } from '@/services/chatService';
@@ -51,6 +51,13 @@ export default function ItemDetailsScreen() {
   const flatListRef = useRef<FlatList>(null);
   const thumbnailsRef = useRef<FlatList>(null);
   
+  // Trade proposal related states
+  const [showTradeModal, setShowTradeModal] = useState(false);
+  const [userItems, setUserItems] = useState<Item[]>([]);
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [loadingUserItems, setLoadingUserItems] = useState(false);
+  const [ownerItemCount, setOwnerItemCount] = useState(0);
+  
   // Always call the hook, but conditionally use the URL
   const videoPlayer = useVideoPlayer(selectedVideoUrl || '', player => {
     if (selectedVideoUrl) {
@@ -80,6 +87,19 @@ export default function ItemDetailsScreen() {
         
         // Process media files
         processMediaFiles(data);
+        
+        // Fetch owner's item count if we have the owner's ID
+        if (data?.profiles?.id) {
+          const { count, error: countError } = await supabase
+            .from('items')
+            .select('*', { count: 'exact', head: true })
+            .eq('user_id', data.profiles.id)
+            .eq('is_available', true);
+            
+          if (!countError && count !== null) {
+            setOwnerItemCount(count);
+          }
+        }
       } catch (error) {
         console.error('Error fetching item:', error);
       } finally {
@@ -349,6 +369,96 @@ export default function ItemDetailsScreen() {
     }
   };
 
+  // Function to fetch user's items for trade
+  const fetchUserItems = async () => {
+    if (!user) {
+      Alert.alert('Error', 'You need to be logged in to propose trades');
+      return;
+    }
+    
+    try {
+      setLoadingUserItems(true);
+      const { data, error } = await supabase
+        .from('items')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('is_available', true);
+        
+      if (error) throw error;
+      
+      setUserItems(data || []);
+    } catch (error) {
+      console.error('Error fetching user items:', error);
+      Alert.alert('Error', 'Failed to load your items. Please try again.');
+    } finally {
+      setLoadingUserItems(false);
+    }
+  };
+  
+  // Function to handle trade proposal
+  const handleProposeTrade = async () => {
+    if (!user) {
+      Alert.alert('Error', 'You need to be logged in to propose trades');
+      return;
+    }
+    
+    if (!item) {
+      Alert.alert('Error', 'Item details not available');
+      return;
+    }
+    
+    // Fetch user's items before showing the modal
+    await fetchUserItems();
+    
+    // If user has no items, show an alert
+    if (userItems.length === 0) {
+      Alert.alert(
+        'No Items Available',
+        'You need to add items to your inventory before proposing a trade.',
+        [
+          { text: 'Add Items', onPress: () => router.push('/my-items') },
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      );
+      return;
+    }
+    
+    // Show the trade modal
+    setShowTradeModal(true);
+  };
+  
+  // Function to submit the trade proposal
+  const submitTradeProposal = async () => {
+    if (!selectedItemId) {
+      Alert.alert('Error', 'Please select an item to offer');
+      return;
+    }
+    
+    try {
+      const { data, error } = await supabase
+        .from('trades')
+        .insert({
+          proposer_id: user?.id,
+          receiver_id: item?.profiles?.id,
+          offered_item_id: selectedItemId,
+          requested_item_id: item?.id,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select();
+        
+      if (error) throw error;
+      
+      Alert.alert('Success', 'Trade proposal sent!');
+      setShowTradeModal(false);
+      setSelectedItemId(null);
+    } catch (error) {
+      console.error('Error proposing trade:', error);
+      Alert.alert('Error', 'Failed to propose trade. Please try again.');
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -433,12 +543,60 @@ export default function ItemDetailsScreen() {
                       </View>
                     </View>
                     
+                    <View style={styles.ownerActions}>
+                      <TouchableOpacity 
+                        style={styles.actionButton}
+                        onPress={navigateToChat}
+                      >
+                        <MessageCircle color="#FFFFFF" size={20} />
+                        <Text style={styles.actionButtonText}>Chat</Text>
+                      </TouchableOpacity>
+                      
+                      {user?.id !== item.profiles.id && (
+                        <TouchableOpacity 
+                          style={[styles.actionButton, styles.tradeButton]}
+                          onPress={handleProposeTrade}
+                        >
+                          <Repeat color="#FFFFFF" size={20} />
+                          <Text style={styles.actionButtonText}>Propose Trade</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                  
+                  {/* Owner Stats Section */}
+                  <View style={styles.ownerStatsContainer}>
+                    <View style={styles.statCard}>
+                      <Text style={styles.statValue}>{item.profiles.rating ? item.profiles.rating.toFixed(1) : '0.0'}</Text>
+                      <View style={styles.ratingStars}>
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <Star 
+                            key={star}
+                            size={16}
+                            color={star <= Math.round(item.profiles.rating || 0) ? '#FFD700' : '#DDDDDD'}
+                            fill={star <= Math.round(item.profiles.rating || 0) ? '#FFD700' : 'none'}
+                          />
+                        ))}
+                      </View>
+                      <Text style={styles.statLabel}>Rating</Text>
+                    </View>
+                    
+                    <View style={styles.statCard}>
+                      <Text style={styles.statValue}>{item.profiles.completed_trades || '0'}</Text>
+                      <Award size={20} color="#22C55E" style={styles.statIcon} />
+                      <Text style={styles.statLabel}>Trades</Text>
+                    </View>
+                    
                     <TouchableOpacity 
-                      style={styles.chatButton}
-                      onPress={navigateToChat}
+                      style={styles.statCard}
+                      onPress={() => router.push({
+                        pathname: '/my-items',
+                        params: { userId: item.profiles.id }
+                      })}
                     >
-                      <MessageCircle color="#FFFFFF" size={20} />
-                      <Text style={styles.chatButtonText}>Chat</Text>
+                      <Text style={styles.statValue}>{ownerItemCount}</Text>
+                      <LucidePackage size={20} color="#22C55E" style={styles.statIcon} />
+                      <Text style={styles.statLabel}>Items</Text>
                     </TouchableOpacity>
                   </View>
                   
@@ -464,6 +622,95 @@ export default function ItemDetailsScreen() {
           </View>
         )}
       </ScrollView>
+      
+      {/* Trade Proposal Modal */}
+      <Modal
+        visible={showTradeModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowTradeModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Propose a Trade</Text>
+              <TouchableOpacity 
+                style={styles.modalCloseButton}
+                onPress={() => {
+                  setShowTradeModal(false);
+                  setSelectedItemId(null);
+                }}
+              >
+                <ArrowLeft size={24} color="#333" />
+              </TouchableOpacity>
+            </View>
+            
+            <Text style={styles.modalSubtitle}>Select an item to offer:</Text>
+            
+            {loadingUserItems ? (
+              <View style={styles.loadingContainer}>
+                <Text>Loading your items...</Text>
+              </View>
+            ) : userItems.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>You don't have any items to trade.</Text>
+                <TouchableOpacity 
+                  style={styles.addItemButton}
+                  onPress={() => {
+                    setShowTradeModal(false);
+                    router.push('/my-items');
+                  }}
+                >
+                  <Text style={styles.addItemButtonText}>Add Items</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <FlatList
+                data={userItems}
+                keyExtractor={(item) => item.id}
+                renderItem={({ item: userItem }) => (
+                  <TouchableOpacity 
+                    style={[
+                      styles.itemOption,
+                      selectedItemId === userItem.id && styles.selectedItemOption
+                    ]}
+                    onPress={() => setSelectedItemId(userItem.id)}
+                  >
+                    <ExpoImage
+                      source={{ uri: userItem.image_url ? getSupabaseFileUrl(userItem.image_url) : 'https://via.placeholder.com/60' }}
+                      style={styles.itemOptionImage}
+                      contentFit="cover"
+                    />
+                    <View style={styles.itemOptionDetails}>
+                      <Text style={styles.itemOptionName}>{userItem.name}</Text>
+                      <Text style={styles.itemOptionCategory}>{userItem.category}</Text>
+                    </View>
+                    {selectedItemId === userItem.id && (
+                      <View style={styles.selectedCheckmark}>
+                        <Text style={styles.checkmarkText}>✓</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                )}
+                contentContainerStyle={styles.itemOptionsList}
+              />
+            )}
+            
+            <View style={styles.modalFooter}>
+              <TouchableOpacity 
+                style={[
+                  styles.submitButton,
+                  (!selectedItemId || loadingUserItems) && styles.disabledButton
+                ]}
+                onPress={submitTradeProposal}
+                disabled={!selectedItemId || loadingUserItems}
+              >
+                <Text style={styles.submitButtonText}>Propose Trade</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -647,30 +894,29 @@ const styles = StyleSheet.create({
     color: '#444',
   },
   ownerContainer: {
-    marginTop: 8,
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
-    padding: 0,
+    marginTop: 24,
+    marginBottom: 16,
   },
   ownerTitle: {
     fontSize: 18,
     fontWeight: 'bold',
     marginBottom: 12,
-    color: '#222',
     paddingHorizontal: 16,
-    paddingTop: 16,
   },
   ownerCard: {
     flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+    marginHorizontal: 16,
+    marginBottom: 16,
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingBottom: 16,
+    alignItems: 'flex-start',
   },
   ownerInfo: {
     flexDirection: 'row',
@@ -698,11 +944,16 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 2,
   },
-  chatButton: {
+  ownerActions: {
+    flexDirection: 'column',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  actionButton: {
     backgroundColor: '#22C55E',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 10,
     paddingHorizontal: 16,
     borderRadius: 24,
     shadowColor: '#000',
@@ -710,11 +961,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 2,
+    justifyContent: 'center',
+    minWidth: 140,
   },
-  chatButtonText: {
+  actionButtonText: {
     color: '#FFFFFF',
     fontWeight: 'bold',
-    marginLeft: 6,
+    marginLeft: 8,
+    fontSize: 14,
+  },
+  tradeButton: {
+    backgroundColor: '#5856D6',
   },
   errorContainer: {
     flex: 1,
@@ -767,5 +1024,181 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#22C55E',
     fontWeight: '500',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    backgroundColor: '#fff',
+    padding: 20,
+    borderRadius: 16,
+    width: '80%',
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  modalCloseButton: {
+    padding: 8,
+  },
+  modalSubtitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 16,
+  },
+  itemOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderWidth: 2,
+    borderColor: '#f0f0f0',
+    borderRadius: 8,
+  },
+  selectedItemOption: {
+    borderColor: '#22C55E',
+  },
+  itemOptionImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    marginRight: 16,
+  },
+  itemOptionDetails: {
+    flex: 1,
+  },
+  itemOptionName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  itemOptionCategory: {
+    fontSize: 14,
+    color: '#666',
+  },
+  selectedCheckmark: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#22C55E',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 'auto',
+  },
+  checkmarkText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  itemOptionsList: {
+    padding: 16,
+  },
+  modalFooter: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  submitButton: {
+    backgroundColor: '#22C55E',
+    padding: 16,
+    borderRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 16,
+  },
+  addItemButton: {
+    backgroundColor: '#22C55E',
+    padding: 16,
+    borderRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  addItemButtonText: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
+  },
+  ownerStatsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginHorizontal: 16,
+    marginBottom: 16,
+    gap: 10,
+  },
+  statCard: {
+    flex: 1,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 4,
+    color: '#222',
+    textAlign: 'center',
+  },
+  statLabel: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  ratingStars: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 0,
+    marginBottom: 0,
+    height: 24,
+    justifyContent: 'center',
+  },
+  starIcon: {
+    fontSize: 16,
+    color: '#DDDDDD',
+    marginRight: 2,
+  },
+  filledStar: {
+    color: '#FFD700',
+  },
+  statIcon: {
+    marginBottom: 0,
+    marginTop: 0,
+    height: 24,
+    justifyContent: 'center',
   },
 }); 

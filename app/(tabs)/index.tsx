@@ -257,7 +257,30 @@ export default function DiscoverScreen() {
     })
   ).current;
 
-  const swipeRight = () => {
+  const swipeRight = async () => {
+    // Get the current item being swiped
+    const currentItem = items[currentIndex];
+    
+    // Add item to liked items
+    if (currentItem && user?.id) {
+      try {
+        const { error } = await supabase
+          .from('liked_items')
+          .upsert({
+            user_id: user.id,
+            item_id: currentItem.id,
+            created_at: new Date().toISOString()
+          });
+          
+        if (error) {
+          console.error('Error adding item to liked items:', error);
+        }
+      } catch (error) {
+        console.error('Error in swipeRight:', error);
+      }
+    }
+    
+    // Continue with animation
     Animated.timing(position, { 
       toValue: { x: SCREEN_WIDTH + 100, y: lastGesture.dy }, 
       duration: 300, 

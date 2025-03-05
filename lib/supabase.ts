@@ -131,3 +131,10 @@ export type Review = {
   comment: string | null;
   created_at: string;
 };
+
+export type LikedItem = {
+  id: string;
+  user_id: string;
+  item_id: string;
+  created_at: string;
+};

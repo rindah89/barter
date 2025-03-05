@@ -21,6 +21,7 @@ import { useAuth } from '../../lib/AuthContext';
 import { getDefaultAvatar } from '../../lib/useDefaultAvatar';
 import { LinearGradient } from 'expo-linear-gradient';
 import LottieView from 'lottie-react-native';
+import { useRouter } from 'expo-router';
 
 // Define extended Trade type with additional properties used in the component
 interface ExtendedTrade extends Trade {
@@ -60,6 +61,7 @@ export default function TradesScreen() {
     receiver: null,
   });
   const insets = useSafeAreaInsets();
+  const router = useRouter();
 
   useEffect(() => {
     if (user) {
@@ -72,6 +74,60 @@ export default function TradesScreen() {
     try {
       setLoading(true);
       setError(null);
+      
+      // Handle liked items filter separately
+      if (activeFilter === 'liked') {
+        // Fetch liked items
+        const { data: likedItemsData, error: likedItemsError } = await supabase
+          .from('liked_items')
+          .select(`
+            *,
+            item:item_id(*)
+          `)
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
+          
+        if (likedItemsError) throw likedItemsError;
+        
+        // Fetch user's own items for potential trades
+        const { data: userItems, error: userItemsError } = await supabase
+          .from('items')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('is_available', true);
+          
+        if (userItemsError) throw userItemsError;
+        
+        // Create potential trade proposals from liked items
+        const potentialTrades = likedItemsData?.map(likedItem => {
+          const item = likedItem.item;
+          // Use the first available user item, or null if none available
+          const userItem = userItems && userItems.length > 0 ? userItems[0] : null;
+          
+          return {
+            id: `potential-${likedItem.id}`,
+            proposer_id: user.id,
+            receiver_id: item.user_id,
+            offered_item_id: userItem ? userItem.id : '',
+            requested_item_id: item.id,
+            status: 'potential',
+            created_at: likedItem.created_at,
+            updated_at: likedItem.created_at,
+            type: 'potential',
+            date: likedItem.created_at,
+            proposer: { id: user.id, name: 'You' },
+            receiver: { id: item.user_id, name: 'Item Owner' },
+            offered_item: userItem,
+            requested_item: item
+          } as ExtendedTrade;
+        }) || [];
+        
+        setTrades(potentialTrades);
+        setLoading(false);
+        return;
+      }
+      
+      // Regular trade fetching for other filters
       let query = supabase
         .from('trades')
         .select(`
@@ -83,7 +139,11 @@ export default function TradesScreen() {
         `)
         .or(`proposer_id.eq.${user.id},receiver_id.eq.${user.id}`);
 
-      if (activeFilter !== 'all') {
+      if (activeFilter === 'sent') {
+        query = query.eq('proposer_id', user.id);
+      } else if (activeFilter === 'received') {
+        query = query.eq('receiver_id', user.id);
+      } else if (activeFilter !== 'all') {
         query = query.eq('status', activeFilter);
       }
 
@@ -209,8 +269,52 @@ export default function TradesScreen() {
     if (activeFilter === 'completed') return trade.status === 'accepted';
     if (activeFilter === 'sent') return trade.type === 'sent';
     if (activeFilter === 'received') return trade.type === 'received';
+    if (activeFilter === 'liked') return trade.type === 'potential';
     return true;
   });
+
+  const handleProposeTrade = async (trade: ExtendedTrade) => {
+    // Check if user has items to offer
+    if (!trade.offered_item) {
+      Alert.alert(
+        'No Items Available',
+        'You need to add items to your inventory before proposing a trade.',
+        [
+          { text: 'Add Items', onPress: () => router.push('/my-items') },
+          { text: 'Cancel', style: 'cancel' }
+        ]
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+      // Create a real trade from the potential trade
+      const { data, error } = await supabase
+        .from('trades')
+        .insert({
+          proposer_id: user?.id,
+          receiver_id: trade.receiver_id,
+          offered_item_id: trade.offered_item_id,
+          requested_item_id: trade.requested_item_id,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .select();
+
+      if (error) throw error;
+      
+      Alert.alert('Success', 'Trade proposal sent!');
+      // Refresh trades list
+      fetchTrades();
+    } catch (err) {
+      console.error('Error proposing trade:', err);
+      Alert.alert('Error', 'Failed to propose trade');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const renderTradeItem = ({ item }: { item: ExtendedTrade }) => (
     <View style={styles.tradeCard}>
@@ -221,23 +325,33 @@ export default function TradesScreen() {
             style={styles.avatar}
           />
           <Text style={styles.username}>
-            {item.proposer_id === user?.id ? 'You → ' + (item.receiver?.name || 'Unknown') : (item.proposer?.name || 'Unknown') + ' → You'}
+            {item.type === 'potential' 
+              ? 'Liked Item from ' + (item.requested_item?.name || 'Unknown Owner')
+              : item.proposer_id === user?.id 
+                ? 'You → ' + (item.receiver?.name || 'Unknown') 
+                : (item.proposer?.name || 'Unknown') + ' → You'}
           </Text>
         </View>
         <View style={styles.statusContainer}>
-          <Text
-            style={[
-              styles.statusBadge,
-              {
-                backgroundColor:
-                  item.status === 'accepted' ? '#4CD964' :
-                  item.status === 'rejected' ? '#FF3B30' :
-                  '#FF9500',
-              },
-            ]}
-          >
-            {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
-          </Text>
+          {item.type === 'potential' ? (
+            <Text style={[styles.statusBadge, { backgroundColor: '#5856D6' }]}>
+              Liked
+            </Text>
+          ) : (
+            <Text
+              style={[
+                styles.statusBadge,
+                {
+                  backgroundColor:
+                    item.status === 'accepted' ? '#4CD964' :
+                    item.status === 'rejected' ? '#FF3B30' :
+                    '#FF9500',
+                },
+              ]}
+            >
+              {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+            </Text>
+          )}
         </View>
       </View>
       <View style={styles.tradeContent}>
@@ -267,13 +381,23 @@ export default function TradesScreen() {
       </View>
       <View style={styles.tradeFooter}>
         <Text style={styles.tradeDate}>{formatDate(item.created_at)}</Text>
-        <TouchableOpacity
-          style={styles.detailsButton}
-          onPress={() => handleViewDetails(item)}
-        >
-          <Info color="#007AFF" size={16} />
-          <Text style={styles.detailsButtonText}>Details</Text>
-        </TouchableOpacity>
+        {item.type === 'potential' ? (
+          <TouchableOpacity
+            style={[styles.actionButton, styles.proposeButton]}
+            onPress={() => handleProposeTrade(item)}
+          >
+            <Repeat color="#FFFFFF" size={16} />
+            <Text style={styles.actionButtonText}>Propose Trade</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={styles.detailsButton}
+            onPress={() => handleViewDetails(item)}
+          >
+            <Info color="#007AFF" size={16} />
+            <Text style={styles.detailsButtonText}>Details</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -296,6 +420,7 @@ export default function TradesScreen() {
           <ScrollableFilter
             options={[
               { id: 'all', label: 'All' },
+              { id: 'liked', label: 'Liked Items' },
               { id: 'pending', label: 'Pending' },
               { id: 'completed', label: 'Completed' },
               { id: 'sent', label: 'Sent' },
@@ -860,5 +985,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     marginLeft: 8,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    justifyContent: 'center',
+  },
+  proposeButton: {
+    backgroundColor: '#5856D6',
+  },
+  actionButtonText: {
+    color: '#FFFFFF',
+    marginLeft: 4,
+    fontSize: 14,
+    fontWeight: '500',
   },
 });
