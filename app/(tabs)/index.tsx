@@ -23,6 +23,8 @@ import useProfile from '../../hooks/useProfile';
 import { getDefaultAvatar } from '../../lib/useDefaultAvatar';
 import ChatButton from '../components/ChatButton';
 import { getSupabaseFileUrl } from '../../services/imageservice';
+import LoadingIndicator from '../../components/LoadingIndicator';
+import { useLoading } from '../../lib/LoadingContext';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SWIPE_THRESHOLD = 120;
@@ -48,6 +50,7 @@ export default function DiscoverScreen() {
   const { user } = useAuth();
   const { profile } = useProfile();
   const [lastGesture, setLastGesture] = useState({ dx: 0, dy: 0 });
+  const { setIsLoading } = useLoading();
 
   // Predefined categories (fetch dynamically if possible)
   const categories = ['Electronics', 'Fashion', 'Home', 'Sports', 'Books', 'Other'];
@@ -317,6 +320,12 @@ export default function DiscoverScreen() {
     fetchItems();
   };
 
+  // Function to handle navigation to item details
+  const navigateToItemDetails = (itemId: string) => {
+    setIsLoading(true);
+    router.push(`/item-details?id=${itemId}`);
+  };
+
   // Skeleton Card Component
   const SkeletonCard = ({ pulseOpacity }: { pulseOpacity: Animated.AnimatedInterpolation<number> }) => (
     <View style={styles.card}>
@@ -489,7 +498,10 @@ export default function DiscoverScreen() {
                 </View>
               )}
               
-              <TouchableOpacity style={styles.detailsButton} onPress={() => router.push(`/item-details?id=${item.id}`)}>
+              <TouchableOpacity 
+                style={styles.detailsButton} 
+                onPress={() => navigateToItemDetails(item.id)}
+              >
                 <Text style={styles.detailsButtonText}>View Details</Text>
               </TouchableOpacity>
             </View>
@@ -543,7 +555,10 @@ export default function DiscoverScreen() {
                 </View>
               )}
               
-              <TouchableOpacity style={styles.detailsButton} onPress={() => router.push(`/item-details?id=${item.id}`)}>
+              <TouchableOpacity 
+                style={styles.detailsButton} 
+                onPress={() => navigateToItemDetails(item.id)}
+              >
                 <Text style={styles.detailsButtonText}>View Details</Text>
               </TouchableOpacity>
             </View>

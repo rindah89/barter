@@ -15,6 +15,7 @@ import { Tables } from '@/database.types';
 import { useToast } from '../../lib/ToastContext';
 import ConfirmationDialog from '../../components/ConfirmationDialog';
 import MediaSourceModal from '../../components/MediaSourceModal';
+import LoadingIndicator from '../../components/LoadingIndicator';
 
 // Categories for items
 const CATEGORIES = [
@@ -685,10 +686,11 @@ export default function MyItemsScreen() {
 
       <SafeAreaView style={styles.contentContainer} edges={['bottom', 'left', 'right']}>
         {loading && !refreshing ? (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color="#22C55E" />
-            <Text style={styles.loadingText}>Loading your items...</Text>
-          </View>
+          <LoadingIndicator 
+            message="Loading your items..." 
+            containerStyle={styles.loadingContainer}
+            textStyle={styles.loadingText}
+          />
         ) : error ? (
           <View style={styles.errorContainer}>
             <Info color="#FF3B30" size={48} />

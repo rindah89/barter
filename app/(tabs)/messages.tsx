@@ -49,6 +49,7 @@ export default function MessagesScreen() {
   const [chatRooms, setChatRooms] = useState<ChatRoom[]>([]);
   const [loadingChats, setLoadingChats] = useState(false);
   const [creatingChatRoom, setCreatingChatRoom] = useState<{[key: string]: boolean}>({});
+  const [participants, setParticipants] = useState<{[key: string]: any}>({});
 
   // Load user's chat rooms
   useEffect(() => {
@@ -63,11 +64,51 @@ export default function MessagesScreen() {
     setLoadingChats(true);
     try {
       const result = await chatService.getUserChatRooms(user.id);
+      console.log('Fetched chat rooms:', result);
       if (result.success && result.chatRooms) {
         setChatRooms(result.chatRooms);
+        console.log('Chat rooms set in state:', result.chatRooms);
+        
+        // Get all unique participant IDs (excluding current user)
+        const participantIds = new Set<string>();
+        result.chatRooms.forEach(room => {
+          room.participant_ids.forEach(id => {
+            if (id !== user.id) {
+              participantIds.add(id);
+            }
+          });
+        });
+
+        // Fetch all participants' details in one query
+        const { data: participantsData } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', Array.from(participantIds));
+
+        if (participantsData) {
+          // Create a map of participant ID to participant details
+          const participantsMap = participantsData.reduce((acc, participant) => {
+            acc[participant.id] = participant;
+            return acc;
+          }, {} as {[key: string]: any});
+          
+          setParticipants(participantsMap);
+        }
+      } else if (result.error) {
+        console.error('Error fetching chat rooms:', result.error);
+        Alert.alert(
+          'Error',
+          'Failed to load your conversations. Pull down to refresh.',
+          [{ text: 'OK' }]
+        );
       }
     } catch (error) {
       console.error('Error fetching chat rooms:', error);
+      Alert.alert(
+        'Error',
+        'Failed to load your conversations. Pull down to refresh.',
+        [{ text: 'OK' }]
+      );
     } finally {
       setLoadingChats(false);
     }
@@ -201,9 +242,20 @@ export default function MessagesScreen() {
 
   // Render chat room item
   const renderChatRoomItem = ({ item }: { item: ChatRoom }) => {
-    // Find the other participant (not the current user)
-    const otherParticipant = item.participants.find(p => p.id !== user?.id);
-    if (!otherParticipant) return null;
+    // Get the other participant's ID from participant_ids array
+    const otherParticipantId = item.participant_ids.find(id => id !== user?.id);
+    if (!otherParticipantId) return null;
+
+    const otherParticipant = participants[otherParticipantId];
+    if (!otherParticipant) {
+      return (
+        <View style={styles.chatItem}>
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="small" color="#22C55E" />
+          </View>
+        </View>
+      );
+    }
     
     const lastMessage = item.last_message?.content || '';
     const timestamp = formatTimestamp(item.last_message?.created_at || item.created_at);
@@ -239,7 +291,6 @@ export default function MessagesScreen() {
                 {lastMessage || 'Start a conversation...'}
               </Text>
             )}
-            {/* Unread count would be implemented here */}
           </View>
         </View>
       </TouchableOpacity>
@@ -352,11 +403,13 @@ export default function MessagesScreen() {
               </View>
             ) : (
               <FlatList
-                data={chatRooms.length > 0 ? chatRooms : []}
+                data={chatRooms}
                 renderItem={renderChatRoomItem}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.chatList}
                 ListEmptyComponent={<EmptyChatComponent />}
+                refreshing={loadingChats}
+                onRefresh={fetchUserChatRooms}
               />
             )}
           </View>

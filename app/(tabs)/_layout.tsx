@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Tabs } from 'expo-router';
 import { Home, ShoppingBag, Repeat, User, MessageCircle } from 'lucide-react-native';
 import AuthGuard from '../auth/AuthGuard';
@@ -6,8 +6,16 @@ import { Platform, View } from 'react-native';
 import { uploadFile, getSupabaseFileUrl } from '@/services/imageservice';
 
 export default function TabsLayout() {
+  console.log('[TabsLayout] Rendering tabs layout');
+  
+  useEffect(() => {
+    console.log('[TabsLayout] Tabs layout useEffect running');
+  }, []);
+
+  console.log('[TabsLayout] About to render AuthGuard');
   return (
     <AuthGuard>
+      {console.log('[TabsLayout] Inside AuthGuard children')}
       <Tabs
         screenOptions={{
           tabBarActiveTintColor: '#22C55E',

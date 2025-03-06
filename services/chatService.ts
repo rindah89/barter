@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase';
 import { Tables } from '@/database.types';
 import { uploadFile, getSupabaseFileUrl } from '@/services/imageservice';
 import * as FileSystem from 'expo-file-system';
+import { Audio } from 'expo-av';
 
 export type ChatRoom = Tables<'chat_rooms'> & {
   participants: Tables<'profiles'>[];
@@ -103,7 +104,11 @@ export const chatService = {
         throw insertResult.error;
       }
       
+      // Generate a unique identifier for this message to avoid query issues
+      const timestamp = new Date().toISOString();
+      
       // Then fetch the inserted message with a separate query
+      // Use a more reliable approach that doesn't rely on content matching
       const { data: messages, error: fetchError } = await supabase
         .from('messages')
         .select(`
@@ -112,7 +117,8 @@ export const chatService = {
         `)
         .eq('chat_room_id', chatRoomId)
         .eq('sender_id', senderId)
-        .eq('content', content || '')
+        .eq('message_type', messageType)
+        .gte('created_at', new Date(Date.now() - 10000).toISOString()) // Messages from the last 10 seconds
         .order('created_at', { ascending: false })
         .limit(1);
 
@@ -138,10 +144,11 @@ export const chatService = {
         .from('messages')
         .select(`
           *,
-          sender:profiles(*)
+          sender:profiles(*),
+          read_status:message_read_status(*)
         `)
         .eq('chat_room_id', chatRoomId)
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: false });
 
       if (error) throw error;
 
@@ -155,43 +162,68 @@ export const chatService = {
   // Get user's chat rooms
   async getUserChatRooms(userId: string): Promise<{ success: boolean; chatRooms?: ChatRoom[]; error?: string }> {
     try {
+      // First, get all chat rooms where the user is a participant
       const { data: chatRooms, error } = await supabase
         .from('chat_rooms')
         .select(`
           *,
-          participants:chat_room_participants!inner(
+          participants:chat_room_participants(
             user:profiles(*)
-          ),
-          last_message:messages(
-            *,
-            sender:profiles(*)
           )
         `)
         .contains('participant_ids', [userId])
-        .order('created_at', { ascending: false });
+        .order('updated_at', { ascending: false });
 
       if (error) throw error;
 
-      // Transform the data and get the latest message for each room
-      const transformedChatRooms = await Promise.all(chatRooms.map(async (room: any) => {
-        // Get the latest message for this room
-        const { data: latestMessage } = await supabase
-          .from('messages')
-          .select(`
-            *,
-            sender:profiles(*)
-          `)
-          .eq('chat_room_id', room.id)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .single();
+      console.log('Fetched chat rooms with participants:', chatRooms);
 
+      if (!chatRooms || chatRooms.length === 0) {
+        return { success: true, chatRooms: [] };
+      }
+
+      // Get the latest message for each chat room in a single query
+      const chatRoomIds = chatRooms.map(room => room.id);
+      
+      // This query gets the latest message for each chat room
+      const { data: latestMessages, error: messagesError } = await supabase
+        .from('messages')
+        .select(`
+          *,
+          sender:profiles(*),
+          chat_room_id
+        `)
+        .in('chat_room_id', chatRoomIds)
+        .order('created_at', { ascending: false });
+
+      if (messagesError) throw messagesError;
+
+      // Create a map of chat room ID to its latest message
+      const latestMessageMap: Record<string, any> = {};
+      if (latestMessages) {
+        latestMessages.forEach(message => {
+          // Only set if this is the first (latest) message we've seen for this room
+          if (!latestMessageMap[message.chat_room_id]) {
+            latestMessageMap[message.chat_room_id] = message;
+          }
+        });
+      }
+
+      // Transform the chat rooms data to include participants and latest message
+      const transformedChatRooms = chatRooms.map(room => {
+        // Extract participants from the nested structure
+        const participants = room.participants.map((p: any) => p.user);
+        console.log('Participants for room', room.id, ':', participants);
+        
+        const unreadCount = room.unread_count || 0;
+        
         return {
           ...room,
-          participants: room.participants.map((p: any) => p.user),
-          last_message: latestMessage || null
+          participants,
+          last_message: latestMessageMap[room.id] || null,
+          unread_count: unreadCount
         };
-      }));
+      });
 
       return { success: true, chatRooms: transformedChatRooms as ChatRoom[] };
     } catch (error) {
@@ -239,6 +271,8 @@ export const chatService = {
 
       if (error) throw error;
 
+      const unreadCount = chatRoom.unread_count || 0;
+
       return { success: true, chatRoom: chatRoom as ChatRoom };
     } catch (error) {
       console.error('Error fetching chat room details:', error);
@@ -284,13 +318,21 @@ export const chatService = {
 
   async uploadVoiceMessage(uri: string): Promise<{ success: boolean; url?: string; error?: string }> {
     try {
+      console.log('Starting voice message upload:', uri);
+      
+      // Generate a unique filename for the voice message
+      const filename = `voice_${Date.now()}.m4a`;
+      
+      // Upload the file directly using the URI string
       const result = await uploadFile('voiceMessages', uri, false);
       
       if (!result.success || !result.data) {
+        console.error('Voice upload failed:', result.msg);
         throw new Error(result.msg || 'Upload failed');
       }
 
       const url = getSupabaseFileUrl(result.data);
+      console.log('Voice message uploaded successfully:', url);
       return { success: true, url };
     } catch (error) {
       console.error('Error uploading voice message:', error);
@@ -334,4 +376,19 @@ export const chatService = {
       return { success: false, error: 'Failed to fetch trending GIFs' };
     }
   },
-}; 
+
+  async markMessagesAsRead(chatRoomId: string, userId: string): Promise<{ success: boolean }> {
+    try {
+      await supabase.rpc('mark_messages_as_read', {
+        p_chat_room_id: chatRoomId,
+        p_user_id: userId
+      });
+      return { success: true };
+    } catch (error) {
+      console.error('Error marking messages as read:', error);
+      return { success: false };
+    }
+  },
+};
+
+export default chatService; 

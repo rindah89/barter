@@ -1,7 +1,8 @@
 import React, { useEffect } from 'react';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { router } from 'expo-router';
-import { useAuth } from '../lib/AuthContext';
+import { useAuth } from '../hooks/useAuth';
+import LoadingIndicator from './LoadingIndicator';
 
 type ProtectedRouteProps = {
   children: React.ReactNode;
@@ -12,27 +13,46 @@ export default function ProtectedRoute({
   children,
   fallbackRoute = '/auth/login',
 }: ProtectedRouteProps) {
-  const { session, loading } = useAuth();
+  console.log('[ProtectedRoute] Component rendering started');
+  
+  try {
+    console.log('[ProtectedRoute] About to call useAuth hook');
+    const { session, loading } = useAuth();
+    console.log('[ProtectedRoute] useAuth hook called successfully', { hasSession: !!session, loading });
 
-  useEffect(() => {
-    if (!loading && !session) {
-      router.replace(fallbackRoute);
+    useEffect(() => {
+      console.log('[ProtectedRoute] useEffect running', { hasSession: !!session, loading });
+      if (!loading && !session) {
+        console.log('[ProtectedRoute] No session detected, redirecting to', fallbackRoute);
+        router.replace(fallbackRoute);
+      }
+    }, [session, loading, fallbackRoute]);
+
+    if (loading) {
+      console.log('[ProtectedRoute] Still loading, showing loading indicator');
+      return (
+        <LoadingIndicator 
+          message="Loading..." 
+          containerStyle={styles.loadingContainer}
+        />
+      );
     }
-  }, [session, loading, fallbackRoute]);
 
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#FF6B6B" />
-      </View>
-    );
+    if (!session) {
+      console.log('[ProtectedRoute] No session, returning null (will redirect in useEffect)');
+      return null; // Will redirect in the useEffect
+    }
+
+    console.log('[ProtectedRoute] Session found, rendering children');
+    return <>{children}</>;
+  } catch (error) {
+    console.error('[ProtectedRoute] Error using useAuth:', error);
+    console.error('[ProtectedRoute] Error stack:', error instanceof Error ? error.stack : 'No stack trace available');
+    console.error('[ProtectedRoute] Component tree location:', new Error().stack);
+    
+    // Return null and let the app handle the error state
+    return null;
   }
-
-  if (!session) {
-    return null; // Will redirect in the useEffect
-  }
-
-  return <>{children}</>;
 }
 
 const styles = StyleSheet.create({

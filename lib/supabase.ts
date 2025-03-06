@@ -3,6 +3,7 @@ import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
 import { ExpoSecureStoreAdapter } from './ExpoSecureStoreAdapter';
+import { TradeStatus } from '../database.types';
 
 // Get Supabase URL and anon key from environment variables
 const supabaseUrl =
@@ -102,7 +103,8 @@ export type Trade = {
   receiver_id: string;
   offered_item_id: string;
   requested_item_id: string;
-  status: 'pending' | 'accepted' | 'rejected';
+  status: TradeStatus;
+  cash_amount: number | null;
   created_at: string;
   updated_at: string;
 };

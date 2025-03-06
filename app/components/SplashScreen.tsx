@@ -1,6 +1,7 @@
-import React, { useEffect } from 'react';
-import { View, Image, StyleSheet, Animated } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Image, StyleSheet, Animated, Text } from 'react-native';
 import { router } from 'expo-router';
+import LottieView from 'lottie-react-native';
 
 interface SplashScreenProps {
   onFinish?: () => void;
@@ -9,6 +10,7 @@ interface SplashScreenProps {
 const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
   const fadeAnim = React.useRef(new Animated.Value(0)).current;
   const scaleAnim = React.useRef(new Animated.Value(0.8)).current;
+  const lottieRef = useRef<LottieView>(null);
 
   useEffect(() => {
     // Animation sequence
@@ -28,7 +30,7 @@ const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
         }),
       ]),
       // Wait for a moment
-      Animated.delay(1000),
+      Animated.delay(2000),
       // Fade out
       Animated.timing(fadeAnim, {
         toValue: 0,
@@ -68,6 +70,16 @@ const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
           style={styles.logo}
           resizeMode="contain"
         />
+        <View style={styles.loadingContainer}>
+          <LottieView
+            ref={lottieRef}
+            source={require('../../assets/loading.json')}
+            style={styles.loadingAnimation}
+            autoPlay
+            loop
+          />
+          <Text style={styles.loadingText}>Loading...</Text>
+        </View>
       </Animated.View>
     </View>
   );
@@ -86,6 +98,20 @@ const styles = StyleSheet.create({
   logo: {
     width: 200,
     height: 200,
+    marginBottom: 20,
+  },
+  loadingContainer: {
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  loadingAnimation: {
+    width: 120,
+    height: 120,
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#666666',
   },
 });
 

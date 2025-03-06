@@ -19,30 +19,38 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Provider component that wraps the app and provides auth context
 export function AuthProvider({ children }: { children: ReactNode }) {
+  console.log('[AuthContext] AuthProvider rendering');
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Initialize the auth state on component mount
   useEffect(() => {
+    console.log('[AuthContext] AuthProvider useEffect running');
+    
     // Get the current session
     const initializeAuth = async () => {
+      console.log('[AuthContext] Initializing auth');
       try {
         const { data } = await supabase.auth.getSession();
+        console.log('[AuthContext] Got session:', { hasSession: !!data.session });
         setSession(data.session);
         setUser(data.session?.user ?? null);
       } catch (error) {
-        console.error('Error loading auth session:', error);
+        console.error('[AuthContext] Error loading auth session:', error);
       } finally {
         setLoading(false);
+        console.log('[AuthContext] Auth initialization complete');
       }
     };
 
     initializeAuth();
 
     // Listen for auth state changes
+    console.log('[AuthContext] Setting up auth state change listener');
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, newSession) => {
+        console.log('[AuthContext] Auth state changed:', { event: _event, hasSession: !!newSession });
         setSession(newSession);
         setUser(newSession?.user ?? null);
       }
@@ -50,6 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Clean up the subscription when unmounting
     return () => {
+      console.log('[AuthContext] Cleaning up auth state change listener');
       subscription.unsubscribe();
     };
   }, []);
@@ -156,6 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Show a loading screen while the auth state is being fetched
   if (loading) {
+    console.log('[AuthContext] Still loading, showing loading indicator');
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#FF6B6B" />
@@ -163,6 +173,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
   }
 
+  console.log('[AuthContext] Rendering AuthProvider with context value', { hasSession: !!session, hasUser: !!user });
   // Provide the auth context value to children components
   return (
     <AuthContext.Provider
@@ -183,12 +194,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 // Custom hook to use the auth context
 export function useAuth() {
+  console.log('[AuthContext] useAuth hook called');
   const context = useContext(AuthContext);
   
   if (context === undefined) {
+    console.error('[AuthContext] useAuth hook used outside of AuthProvider');
     throw new Error('useAuth must be used within an AuthProvider');
   }
   
+  console.log('[AuthContext] useAuth hook returning context', { hasSession: !!context.session, hasUser: !!context.user });
   return context;
 }
 

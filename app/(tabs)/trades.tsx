@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,9 +12,10 @@ import {
   RefreshControl,
   StatusBar,
   ScrollView,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Check, X, MessageCircle, Info, Repeat } from 'lucide-react-native';
+import { Check, X, MessageCircle, Info, Repeat, Edit2 } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { Trade, Item, Profile } from '../../lib/supabase';
 import { useAuth } from '../../lib/AuthContext';
@@ -22,6 +23,9 @@ import { getDefaultAvatar } from '../../lib/useDefaultAvatar';
 import { LinearGradient } from 'expo-linear-gradient';
 import LottieView from 'lottie-react-native';
 import { useRouter } from 'expo-router';
+import LoadingIndicator from '../../components/LoadingIndicator';
+import useProfile from '../../hooks/useProfile';
+import { useToast } from '../../lib/ToastContext';
 
 // Define extended Trade type with additional properties used in the component
 interface ExtendedTrade extends Trade {
@@ -31,6 +35,8 @@ interface ExtendedTrade extends Trade {
   receiver?: Profile;
   offered_item?: Item;
   requested_item?: Item;
+  cash_amount?: number | null;
+  isProposer?: boolean;
 }
 
 // Define filter option type
@@ -40,13 +46,32 @@ interface FilterOption {
 }
 
 export default function TradesScreen() {
-  const { user } = useAuth();
+  // Safely use the auth hook with a try-catch block
+  let user;
+  try {
+    const auth = useAuth();
+    user = auth.user;
+  } catch (error) {
+    console.error('Error using useAuth:', error);
+    // Return an error UI if useAuth fails
+    return (
+      <View style={styles.errorContainer}>
+        <Text style={styles.errorText}>Authentication error. Please restart the app.</Text>
+        <Text style={styles.errorSubtext}>Error: useAuth must be used within an AuthProvider</Text>
+      </View>
+    );
+  }
+
+  const { profile } = useProfile();
   const [trades, setTrades] = useState<ExtendedTrade[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState('all');
   const [selectedTrade, setSelectedTrade] = useState<ExtendedTrade | null>(null);
   const [detailsVisible, setDetailsVisible] = useState(false);
+  const [proposeModalVisible, setProposeModalVisible] = useState(false);
+  const [cashAmount, setCashAmount] = useState<string>('');
+  const [proposingTrade, setProposingTrade] = useState<ExtendedTrade | null>(null);
   const [tradeDetails, setTradeDetails] = useState<{
     trade: ExtendedTrade | null;
     offeredItem: Item | null;
@@ -62,12 +87,59 @@ export default function TradesScreen() {
   });
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { showToast } = useToast();
 
   useEffect(() => {
     if (user) {
       fetchTrades();
     }
   }, [user, activeFilter]);
+
+  // Function to navigate to chat with trade details
+  const navigateToChat = (trade: ExtendedTrade) => {
+    const partnerId = trade.proposer_id === user?.id ? trade.receiver_id : trade.proposer_id;
+    const partnerName = trade.proposer_id === user?.id ? trade.receiver?.name : trade.proposer?.name;
+    
+    // Create a formal message with trade details
+    let tradeDetailsMessage = "Regarding our trade proposal: ";
+    
+    // Determine which item is being offered by the message sender
+    const isUserProposer = trade.proposer_id === user?.id;
+    const userOfferedItem = isUserProposer ? trade.offered_item : trade.requested_item;
+    const userRequestedItem = isUserProposer ? trade.requested_item : trade.offered_item;
+    
+    if (userOfferedItem?.name && userRequestedItem?.name) {
+      // Add the item the user is offering
+      tradeDetailsMessage += `I am offering ${userOfferedItem.name}`;
+      
+      // Add cash amount if it exists and the user is the one offering cash
+      if (trade.cash_amount && trade.cash_amount > 0 && isUserProposer) {
+        tradeDetailsMessage += ` with an additional ${trade.cash_amount.toLocaleString()} FCFA`;
+      }
+      
+      // Add the item the user is requesting
+      tradeDetailsMessage += ` in exchange for your ${userRequestedItem.name}`;
+      
+      // Add cash amount if it exists and the user is the one receiving cash
+      if (trade.cash_amount && trade.cash_amount > 0 && !isUserProposer) {
+        tradeDetailsMessage += ` with an additional ${trade.cash_amount.toLocaleString()} FCFA from you`;
+      }
+    }
+    
+    // Add a polite closing
+    tradeDetailsMessage += ". I would like to discuss this trade with you.";
+    
+    // Navigate to chat screen with partner ID, initial message, and trade ID
+    router.push({
+      pathname: '/chat',
+      params: {
+        partnerId,
+        partnerName,
+        initialMessage: tradeDetailsMessage,
+        tradeId: trade.id
+      }
+    });
+  };
 
   const fetchTrades = async () => {
     if (!user) return;
@@ -98,11 +170,30 @@ export default function TradesScreen() {
           
         if (userItemsError) throw userItemsError;
         
+        // Create an array of seller IDs to fetch their profiles
+        const sellerIds = likedItemsData?.map(likedItem => likedItem.item.user_id) || [];
+        
+        // Fetch seller profiles
+        const { data: sellerProfiles, error: sellerProfilesError } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', sellerIds);
+          
+        if (sellerProfilesError) throw sellerProfilesError;
+        
+        // Create a map of seller profiles for easy lookup
+        const sellerProfileMap = sellerProfiles?.reduce((map, profile) => {
+          map[profile.id] = profile;
+          return map;
+        }, {} as Record<string, Profile>) || {};
+        
         // Create potential trade proposals from liked items
         const potentialTrades = likedItemsData?.map(likedItem => {
           const item = likedItem.item;
           // Use the first available user item, or null if none available
           const userItem = userItems && userItems.length > 0 ? userItems[0] : null;
+          // Get the seller profile
+          const sellerProfile = sellerProfileMap[item.user_id] || { id: item.user_id, name: 'Item Owner' };
           
           return {
             id: `potential-${likedItem.id}`,
@@ -116,7 +207,7 @@ export default function TradesScreen() {
             type: 'potential',
             date: likedItem.created_at,
             proposer: { id: user.id, name: 'You' },
-            receiver: { id: item.user_id, name: 'Item Owner' },
+            receiver: sellerProfile,
             offered_item: userItem,
             requested_item: item
           } as ExtendedTrade;
@@ -152,11 +243,15 @@ export default function TradesScreen() {
       if (fetchError) throw fetchError;
       
       // Process the trades to add the type property
-      const processedTrades = data?.map(trade => ({
-        ...trade,
-        type: trade.proposer_id === user.id ? 'sent' : 'received',
-        date: trade.created_at
-      })) as ExtendedTrade[];
+      const processedTrades = data?.map(trade => {
+        const isProposer = trade.proposer_id === user.id;
+        return {
+          ...trade,
+          type: isProposer ? 'sent' : 'received',
+          date: trade.created_at,
+          isProposer: isProposer
+        };
+      }) as ExtendedTrade[];
       
       setTrades(processedTrades);
     } catch (err) {
@@ -185,10 +280,10 @@ export default function TradesScreen() {
           trade: { ...tradeDetails.trade, status: 'accepted' } as ExtendedTrade,
         });
       }
-      Alert.alert('Success', 'Trade accepted successfully!');
+      showToast('Trade accepted successfully!', 'success', 3000);
     } catch (err) {
       console.error('Error accepting trade:', err);
-      Alert.alert('Error', 'Failed to accept trade');
+      showToast('Failed to accept trade', 'error', 3000);
     } finally {
       setLoading(false);
     }
@@ -212,13 +307,51 @@ export default function TradesScreen() {
           trade: { ...tradeDetails.trade, status: 'rejected' } as ExtendedTrade,
         });
       }
-      Alert.alert('Success', 'Trade rejected successfully!');
+      showToast('Trade rejected successfully!', 'success', 3000);
     } catch (err) {
       console.error('Error rejecting trade:', err);
-      Alert.alert('Error', 'Failed to reject trade');
+      showToast('Failed to reject trade', 'error', 3000);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCancelTrade = async (id: string) => {
+    if (!id) return;
+    try {
+      setLoading(true);
+      const { error } = await supabase
+        .from('trades')
+        .update({ status: 'canceled', updated_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) throw error;
+      setTrades(trades.map((trade) =>
+        trade.id === id ? { ...trade, status: 'canceled' } : trade
+      ));
+      if (detailsVisible) {
+        setTradeDetails({
+          ...tradeDetails,
+          trade: { ...tradeDetails.trade, status: 'canceled' } as ExtendedTrade,
+        });
+      }
+      showToast('Trade canceled successfully!', 'success', 3000);
+      setDetailsVisible(false);
+    } catch (err) {
+      console.error('Error canceling trade:', err);
+      showToast('Failed to cancel trade', 'error', 3000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAmendTrade = (trade: ExtendedTrade) => {
+    // Close details modal
+    setDetailsVisible(false);
+    
+    // Set up the propose modal with the existing trade data
+    setProposingTrade(trade);
+    setCashAmount(trade.cash_amount ? trade.cash_amount.toString() : '0');
+    setProposeModalVisible(true);
   };
 
   const handleViewDetails = async (trade: ExtendedTrade) => {
@@ -238,8 +371,17 @@ export default function TradesScreen() {
         .eq('id', trade.id)
         .single();
       if (error) throw error;
+      
+      // Add the type property and isProposer flag to the trade object
+      const isProposer = data.proposer_id === user?.id;
+      const tradeWithType = {
+        ...data,
+        type: isProposer ? 'sent' : 'received',
+        isProposer: isProposer
+      };
+      
       setTradeDetails({
-        trade: data as any,
+        trade: tradeWithType as any,
         proposer: data.proposer as Profile,
         receiver: data.receiver as Profile,
         offeredItem: data.offered_item as Item,
@@ -287,30 +429,48 @@ export default function TradesScreen() {
       return;
     }
 
+    // Show the propose modal
+    setProposingTrade(trade);
+    setCashAmount('');
+    setProposeModalVisible(true);
+  };
+
+  const submitTradeProposal = async () => {
+    if (!proposingTrade) return;
+    
     try {
       setLoading(true);
+      
+      // Parse cash amount
+      const parsedCashAmount = cashAmount ? parseFloat(cashAmount) : null;
+      
       // Create a real trade from the potential trade
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('trades')
         .insert({
           proposer_id: user?.id,
-          receiver_id: trade.receiver_id,
-          offered_item_id: trade.offered_item_id,
-          requested_item_id: trade.requested_item_id,
+          receiver_id: proposingTrade.receiver_id,
+          offered_item_id: proposingTrade.offered_item_id,
+          requested_item_id: proposingTrade.requested_item_id,
+          cash_amount: parsedCashAmount,
           status: 'pending',
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
-        })
-        .select();
+        });
 
       if (error) throw error;
       
-      Alert.alert('Success', 'Trade proposal sent!');
+      // Use toast instead of Alert
+      showToast('Trade proposal sent!', 'success', 3000);
+      
+      // Close the modal
+      setProposeModalVisible(false);
       // Refresh trades list
       fetchTrades();
     } catch (err) {
       console.error('Error proposing trade:', err);
-      Alert.alert('Error', 'Failed to propose trade');
+      // Use toast instead of Alert
+      showToast('Failed to propose trade', 'error', 3000);
     } finally {
       setLoading(false);
     }
@@ -320,21 +480,53 @@ export default function TradesScreen() {
     <View style={styles.tradeCard}>
       <View style={styles.tradeHeader}>
         <View style={styles.userInfo}>
-          <Image
-            source={{ uri: item.proposer_id === user?.id ? getDefaultAvatar('You') : getDefaultAvatar(item.receiver?.name) }}
-            style={styles.avatar}
-          />
-          <Text style={styles.username}>
-            {item.type === 'potential' 
-              ? 'Liked Item from ' + (item.requested_item?.name || 'Unknown Owner')
-              : item.proposer_id === user?.id 
-                ? 'You → ' + (item.receiver?.name || 'Unknown') 
-                : (item.proposer?.name || 'Unknown') + ' → You'}
-          </Text>
+          {item.type === 'potential' ? (
+            <>
+              <TouchableOpacity onPress={() => navigateToChat(item)}>
+                <View style={styles.avatarContainer}>
+                  <Image
+                    source={{ 
+                      uri: item.receiver?.avatar_url || getDefaultAvatar(item.receiver?.name)
+                    }}
+                    style={styles.avatar}
+                  />
+                  <View style={styles.chatIconOverlay}>
+                    <MessageCircle color="#FFFFFF" size={14} />
+                  </View>
+                </View>
+              </TouchableOpacity>
+              <Text style={styles.username}>
+                {item.receiver?.name || 'Item Owner'}
+              </Text>
+            </>
+          ) : (
+            <>
+              <TouchableOpacity onPress={() => navigateToChat(item)}>
+                <View style={styles.avatarContainer}>
+                  <Image
+                    source={{ 
+                      uri: item.proposer_id === user?.id 
+                        ? (profile?.avatar_url || getDefaultAvatar('You')) 
+                        : (item.proposer?.avatar_url || getDefaultAvatar(item.proposer?.name))
+                    }}
+                    style={styles.avatar}
+                  />
+                  <View style={styles.chatIconOverlay}>
+                    <MessageCircle color="#FFFFFF" size={14} />
+                  </View>
+                </View>
+              </TouchableOpacity>
+              <Text style={styles.username}>
+                {item.proposer_id === user?.id 
+                  ? 'You → ' + (item.receiver?.name || 'Unknown') 
+                  : (item.proposer?.name || 'Unknown') + ' → You'}
+              </Text>
+            </>
+          )}
         </View>
         <View style={styles.statusContainer}>
           {item.type === 'potential' ? (
-            <Text style={[styles.statusBadge, { backgroundColor: '#5856D6' }]}>
+            <Text style={[styles.statusBadge, { backgroundColor: '#22C55E' }]}>
               Liked
             </Text>
           ) : (
@@ -345,6 +537,7 @@ export default function TradesScreen() {
                   backgroundColor:
                     item.status === 'accepted' ? '#4CD964' :
                     item.status === 'rejected' ? '#FF3B30' :
+                    item.status === 'canceled' ? '#FF6347' :
                     '#FF9500',
                 },
               ]}
@@ -354,31 +547,58 @@ export default function TradesScreen() {
           )}
         </View>
       </View>
-      <View style={styles.tradeContent}>
-        <View style={styles.tradeItem}>
-          <Image
-            source={{ uri: item.offered_item?.image_url || 'https://via.placeholder.com/200?text=No+Image' }}
-            style={styles.itemImage}
-          />
-          <Text style={styles.itemName}>{item.offered_item?.name || 'Unknown Item'}</Text>
-          <Text style={styles.tradeDirection}>
-            {item.proposer_id === user?.id ? 'You Offered' : 'Offered to You'}
-          </Text>
+      {item.type === 'potential' ? (
+        <View style={styles.likedItemContent}>
+          <View style={styles.likedItem}>
+            <View style={styles.likedItemImageContainer}>
+              <Image
+                source={{ uri: item.requested_item?.image_url || 'https://via.placeholder.com/200?text=No+Image' }}
+                style={styles.likedItemImage}
+              />
+              <View style={styles.categoryPill}>
+                <Text style={styles.categoryText}>
+                  {item.requested_item?.category || 'Other'}
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.itemName}>{item.requested_item?.name || 'Unknown Item'}</Text>
+            <Text style={styles.tradeDirection}>
+              Liked item from {item.receiver?.name || 'Item Owner'}
+            </Text>
+          </View>
         </View>
-        <View style={styles.tradeArrow}>
-          <Repeat color="#999999" size={24} />
+      ) : (
+        <View style={styles.tradeContent}>
+          <View style={styles.tradeItem}>
+            <Image
+              source={{ uri: item.offered_item?.image_url || 'https://via.placeholder.com/200?text=No+Image' }}
+              style={styles.itemImage}
+            />
+            <Text style={styles.itemName}>{item.offered_item?.name || 'Unknown Item'}</Text>
+            <Text style={styles.tradeDirection}>
+              {item.proposer_id === user?.id ? 'You Offered' : 'Offered to You'}
+            </Text>
+            {item.cash_amount && item.cash_amount > 0 && (
+              <View style={styles.cashBadge}>
+                <Text style={styles.cashText}>+{item.cash_amount.toLocaleString()} FCFA</Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.tradeArrow}>
+            <Repeat color="#999999" size={24} />
+          </View>
+          <View style={styles.tradeItem}>
+            <Image
+              source={{ uri: item.requested_item?.image_url || 'https://via.placeholder.com/200?text=No+Image' }}
+              style={styles.itemImage}
+            />
+            <Text style={styles.itemName}>{item.requested_item?.name || 'Unknown Item'}</Text>
+            <Text style={styles.tradeDirection}>
+              {item.proposer_id === user?.id ? 'You Requested' : 'In Exchange For'}
+            </Text>
+          </View>
         </View>
-        <View style={styles.tradeItem}>
-          <Image
-            source={{ uri: item.requested_item?.image_url || 'https://via.placeholder.com/200?text=No+Image' }}
-            style={styles.itemImage}
-          />
-          <Text style={styles.itemName}>{item.requested_item?.name || 'Unknown Item'}</Text>
-          <Text style={styles.tradeDirection}>
-            {item.proposer_id === user?.id ? 'You Requested' : 'In Exchange For'}
-          </Text>
-        </View>
-      </View>
+      )}
       <View style={styles.tradeFooter}>
         <Text style={styles.tradeDate}>{formatDate(item.created_at)}</Text>
         {item.type === 'potential' ? (
@@ -394,7 +614,7 @@ export default function TradesScreen() {
             style={styles.detailsButton}
             onPress={() => handleViewDetails(item)}
           >
-            <Info color="#007AFF" size={16} />
+            <Info color="#FFFFFF" size={16} />
             <Text style={styles.detailsButtonText}>Details</Text>
           </TouchableOpacity>
         )}
@@ -431,7 +651,7 @@ export default function TradesScreen() {
           />
         </View>
         {loading ? (
-          <ActivityIndicator size="large" color="#22C55E" />
+          <LoadingIndicator size="medium" />
         ) : error ? (
           <View style={styles.errorContainer}>
             <Info color="#FF3B30" size={48} />
@@ -471,6 +691,76 @@ export default function TradesScreen() {
         <Modal
           animationType="slide"
           transparent={true}
+          visible={proposeModalVisible}
+          onRequestClose={() => setProposeModalVisible(false)}
+        >
+          <View style={styles.modalContainer}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Propose Trade</Text>
+                <TouchableOpacity onPress={() => setProposeModalVisible(false)}>
+                  <X color="#333333" size={24} />
+                </TouchableOpacity>
+              </View>
+              <View style={styles.modalBody}>
+                {proposingTrade && (
+                  <>
+                    <View style={styles.tradeItems}>
+                      <View style={styles.detailItemContainer}>
+                        <Image
+                          source={proposingTrade.offered_item?.image_url ? 
+                            { uri: proposingTrade.offered_item.image_url } : 
+                            { uri: 'https://via.placeholder.com/200?text=No+Image' }}
+                          style={styles.detailItemImage}
+                        />
+                        <Text style={styles.detailItemName}>{proposingTrade.offered_item?.name}</Text>
+                        <Text style={styles.detailItemLabel}>You offer</Text>
+                      </View>
+                      <View style={styles.detailItemContainer}>
+                        <Image
+                          source={proposingTrade.requested_item?.image_url ? 
+                            { uri: proposingTrade.requested_item.image_url } : 
+                            { uri: 'https://via.placeholder.com/200?text=No+Image' }}
+                          style={styles.detailItemImage}
+                        />
+                        <Text style={styles.detailItemName}>{proposingTrade.requested_item?.name}</Text>
+                        <Text style={styles.detailItemLabel}>You request</Text>
+                      </View>
+                    </View>
+                    
+                    <View style={styles.cashInputContainer}>
+                      <Text style={styles.cashInputLabel}>Add Cash (optional):</Text>
+                      <View style={styles.cashInputWrapper}>
+                        <TextInput
+                          style={styles.cashInput}
+                          value={cashAmount}
+                          onChangeText={setCashAmount}
+                          placeholder="0"
+                          keyboardType="numeric"
+                          placeholderTextColor="#999999"
+                        />
+                        <Text style={styles.cashSuffix}>FCFA</Text>
+                      </View>
+                      <Text style={styles.cashInputHint}>
+                        Adding cash can increase the chances of your trade being accepted
+                      </Text>
+                    </View>
+                    
+                    <TouchableOpacity
+                      style={styles.submitButton}
+                      onPress={submitTradeProposal}
+                    >
+                      <Text style={styles.submitButtonText}>Send Proposal</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+            </View>
+          </View>
+        </Modal>
+        <Modal
+          animationType="slide"
+          transparent={true}
           visible={detailsVisible}
           onRequestClose={() => setDetailsVisible(false)}
         >
@@ -483,113 +773,204 @@ export default function TradesScreen() {
                     <X color="#333333" size={24} />
                   </TouchableOpacity>
                 </View>
-                <View style={styles.modalBody}>
-                  <View style={styles.tradeParties}>
-                    <View style={styles.tradeParty}>
-                      <Image
-                        source={{ uri: getDefaultAvatar(tradeDetails.proposer?.name) }}
-                        style={styles.partyAvatar}
-                      />
-                      <Text style={styles.partyName}>{tradeDetails.proposer?.name}</Text>
+                <ScrollView style={styles.modalScrollView} contentContainerStyle={styles.modalScrollContent}>
+                  <View style={styles.modalBody}>
+                    <View style={styles.tradeParties}>
+                      <View style={styles.tradeParty}>
+                        <TouchableOpacity 
+                          onPress={() => {
+                            setDetailsVisible(false);
+                            if (tradeDetails.trade && tradeDetails.proposer?.id !== user?.id) {
+                              navigateToChat(tradeDetails.trade);
+                            }
+                          }}
+                          disabled={tradeDetails.proposer?.id === user?.id}
+                        >
+                          <View style={styles.avatarContainer}>
+                            <Image
+                              source={{ 
+                                uri: tradeDetails.proposer?.avatar_url || getDefaultAvatar(tradeDetails.proposer?.name) 
+                              }}
+                              style={[
+                                styles.partyAvatar,
+                                tradeDetails.proposer?.id === user?.id ? styles.disabledAvatar : {}
+                              ]}
+                            />
+                            {tradeDetails.proposer?.id !== user?.id && (
+                              <View style={styles.chatIconOverlay}>
+                                <MessageCircle color="#FFFFFF" size={16} />
+                              </View>
+                            )}
+                          </View>
+                        </TouchableOpacity>
+                        <Text style={styles.partyName}>
+                          {tradeDetails.proposer?.id === user?.id ? 'You' : tradeDetails.proposer?.name}
+                        </Text>
+                        <Text style={styles.partyRole}>Proposer</Text>
+                      </View>
+                      <View style={styles.tradeDirectionContainer}>
+                        <Text style={styles.tradeDirectionText}>⟷</Text>
+                      </View>
+                      <View style={styles.tradeParty}>
+                        <TouchableOpacity 
+                          onPress={() => {
+                            setDetailsVisible(false);
+                            if (tradeDetails.trade && tradeDetails.receiver?.id !== user?.id) {
+                              navigateToChat(tradeDetails.trade);
+                            }
+                          }}
+                          disabled={tradeDetails.receiver?.id === user?.id}
+                        >
+                          <View style={styles.avatarContainer}>
+                            <Image
+                              source={{ 
+                                uri: tradeDetails.receiver?.id === user?.id 
+                                  ? (profile?.avatar_url || getDefaultAvatar('You'))
+                                  : (tradeDetails.receiver?.avatar_url || getDefaultAvatar(tradeDetails.receiver?.name))
+                              }}
+                              style={[
+                                styles.partyAvatar,
+                                tradeDetails.receiver?.id === user?.id ? styles.disabledAvatar : {}
+                              ]}
+                            />
+                            {tradeDetails.receiver?.id !== user?.id && (
+                              <View style={styles.chatIconOverlay}>
+                                <MessageCircle color="#FFFFFF" size={16} />
+                              </View>
+                            )}
+                          </View>
+                        </TouchableOpacity>
+                        <Text style={styles.partyName}>
+                          {tradeDetails.receiver?.id === user?.id ? 'You' : tradeDetails.receiver?.name}
+                        </Text>
+                        <Text style={styles.partyRole}>Receiver</Text>
+                      </View>
                     </View>
-                    <View style={styles.tradeDirectionContainer}>
-                      <Text style={styles.tradeDirectionText}>⟷</Text>
+                    <View style={styles.tradeItems}>
+                      <View style={styles.detailItemContainer}>
+                        <Image
+                          source={tradeDetails.offeredItem?.image_url ? 
+                            { uri: tradeDetails.offeredItem.image_url } : 
+                            { uri: 'https://via.placeholder.com/200?text=No+Image' }}
+                          style={styles.detailItemImage}
+                        />
+                        <Text style={styles.detailItemName}>{tradeDetails.offeredItem?.name}</Text>
+                        <Text style={styles.detailItemLabel}>
+                          {tradeDetails.trade?.type === 'received' ? 'Offered to you' : 'You offered'}
+                        </Text>
+                        {tradeDetails.trade?.cash_amount && tradeDetails.trade.cash_amount > 0 && (
+                          <View style={styles.detailCashBadge}>
+                            <Text style={styles.detailCashText}>+{tradeDetails.trade.cash_amount.toLocaleString()} FCFA</Text>
+                          </View>
+                        )}
+                      </View>
+                      <View style={styles.detailItemContainer}>
+                        <Image
+                          source={tradeDetails.requestedItem?.image_url ? 
+                            { uri: tradeDetails.requestedItem.image_url } : 
+                            { uri: 'https://via.placeholder.com/200?text=No+Image' }}
+                          style={styles.detailItemImage}
+                        />
+                        <Text style={styles.detailItemName}>{tradeDetails.requestedItem?.name}</Text>
+                        <Text style={styles.detailItemLabel}>
+                          {tradeDetails.trade?.type === 'received' ? 'You give' : 'You requested'}
+                        </Text>
+                      </View>
                     </View>
-                    <View style={styles.tradeParty}>
-                      <Image
-                        source={{ uri: getDefaultAvatar('You') }}
-                        style={styles.partyAvatar}
-                      />
-                      <Text style={styles.partyName}>You</Text>
+                    
+                    <View style={styles.tradeInfo}>
+                      <View style={styles.infoRow}>
+                        <Text style={styles.infoLabel}>Status:</Text>
+                        <Text
+                          style={[
+                            styles.infoValue,
+                            {
+                              color:
+                                tradeDetails.trade?.status === 'accepted' ? '#4CD964' :
+                                tradeDetails.trade?.status === 'rejected' ? '#FF3B30' :
+                                tradeDetails.trade?.status === 'canceled' ? '#FF6347' :
+                                '#FF9500',
+                            },
+                          ]}
+                        >
+                          {tradeDetails.trade?.status ? 
+                            tradeDetails.trade.status.charAt(0).toUpperCase() + tradeDetails.trade.status.slice(1) : 
+                            'Pending'}
+                        </Text>
+                      </View>
+                      {tradeDetails.trade?.cash_amount && tradeDetails.trade.cash_amount > 0 && (
+                        <View style={styles.infoRow}>
+                          <Text style={styles.infoLabel}>Cash Amount:</Text>
+                          <Text style={[styles.infoValue, { color: '#22C55E' }]}>
+                            {tradeDetails.trade.cash_amount.toLocaleString()} FCFA
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.infoRow}>
+                        <Text style={styles.infoLabel}>Proposed on:</Text>
+                        <Text style={styles.infoValue}>{formatDate(tradeDetails.trade?.created_at)}</Text>
+                      </View>
                     </View>
-                  </View>
-                  <View style={styles.tradeItems}>
-                    <View style={styles.detailItemContainer}>
-                      <Image
-                        source={tradeDetails.offeredItem?.image_url ? 
-                          { uri: tradeDetails.offeredItem.image_url } : 
-                          { uri: 'https://via.placeholder.com/200?text=No+Image' }}
-                        style={styles.detailItemImage}
-                      />
-                      <Text style={styles.detailItemName}>{tradeDetails.offeredItem?.name}</Text>
-                      <Text style={styles.detailItemLabel}>
-                        {tradeDetails.trade?.type === 'received' ? 'Offered to you' : 'You offered'}
-                      </Text>
-                    </View>
-                    <View style={styles.detailItemContainer}>
-                      <Image
-                        source={tradeDetails.requestedItem?.image_url ? 
-                          { uri: tradeDetails.requestedItem.image_url } : 
-                          { uri: 'https://via.placeholder.com/200?text=No+Image' }}
-                        style={styles.detailItemImage}
-                      />
-                      <Text style={styles.detailItemName}>{tradeDetails.requestedItem?.name}</Text>
-                      <Text style={styles.detailItemLabel}>
-                        {tradeDetails.trade?.type === 'received' ? 'You give' : 'You requested'}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.tradeInfo}>
-                    <View style={styles.infoRow}>
-                      <Text style={styles.infoLabel}>Status:</Text>
-                      <Text
-                        style={[
-                          styles.infoValue,
-                          {
-                            color:
-                              tradeDetails.trade?.status === 'accepted' ? '#4CD964' :
-                              tradeDetails.trade?.status === 'rejected' ? '#FF3B30' :
-                              '#FF9500',
-                          },
-                        ]}
-                      >
-                        {tradeDetails.trade?.status ? 
-                          tradeDetails.trade.status.charAt(0).toUpperCase() + tradeDetails.trade.status.slice(1) : 
-                          'Pending'}
-                      </Text>
-                    </View>
-                    <View style={styles.infoRow}>
-                      <Text style={styles.infoLabel}>Proposed on:</Text>
-                      <Text style={styles.infoValue}>{formatDate(tradeDetails.trade?.created_at)}</Text>
-                    </View>
-                    <View style={styles.infoRow}>
-                      <Text style={styles.infoLabel}>Trade ID:</Text>
-                      <Text style={styles.infoValue}>{tradeDetails.trade?.id}</Text>
-                    </View>
-                  </View>
-                  {tradeDetails.trade?.status === 'pending' && tradeDetails.trade?.type === 'received' && (
-                    <View style={styles.modalActions}>
-                      <TouchableOpacity
-                        style={[styles.modalActionButton, styles.modalRejectButton]}
-                        onPress={() => {
-                          if (tradeDetails.trade?.id) {
-                            handleRejectTrade(tradeDetails.trade.id);
-                          }
-                        }}
-                      >
-                        <X color="#FF3B30" size={20} />
-                        <Text style={styles.modalRejectButtonText}>Reject</Text>
+                    {tradeDetails.trade?.status === 'pending' && !tradeDetails.trade?.isProposer && (
+                      <View style={styles.modalActions}>
+                        <TouchableOpacity
+                          style={[styles.modalActionButton, styles.modalRejectButton]}
+                          onPress={() => {
+                            if (tradeDetails.trade?.id) {
+                              handleRejectTrade(tradeDetails.trade.id);
+                            }
+                          }}
+                        >
+                          <X color="#FF3B30" size={20} />
+                          <Text style={styles.modalRejectButtonText}>Reject</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.modalActionButton, styles.modalAcceptButton]}
+                          onPress={() => {
+                            if (tradeDetails.trade?.id) {
+                              handleAcceptTrade(tradeDetails.trade.id);
+                            }
+                          }}
+                        >
+                          <Check color="#FFFFFF" size={20} />
+                          <Text style={styles.modalAcceptButtonText}>Accept</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                    {tradeDetails.trade?.status === 'pending' && tradeDetails.trade?.isProposer && (
+                      <View style={styles.modalActions}>
+                        <TouchableOpacity
+                          style={[styles.modalActionButton, styles.modalRejectButton]}
+                          onPress={() => {
+                            if (tradeDetails.trade?.id) {
+                              handleCancelTrade(tradeDetails.trade.id);
+                            }
+                          }}
+                        >
+                          <X color="#FF3B30" size={20} />
+                          <Text style={styles.modalRejectButtonText}>Cancel Trade</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.modalActionButton, styles.modalAmendButton]}
+                          onPress={() => {
+                            if (tradeDetails.trade) {
+                              handleAmendTrade(tradeDetails.trade as ExtendedTrade);
+                            }
+                          }}
+                        >
+                          <Edit2 color="#FFFFFF" size={20} />
+                          <Text style={styles.modalAmendButtonText}>Amend Trade</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                    {tradeDetails.trade?.status === 'accepted' && (
+                      <TouchableOpacity style={styles.modalMessageButton}>
+                        <MessageCircle color="#FFFFFF" size={20} />
+                        <Text style={styles.modalMessageText}>Message {tradeDetails.proposer?.name}</Text>
                       </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[styles.modalActionButton, styles.modalAcceptButton]}
-                        onPress={() => {
-                          if (tradeDetails.trade?.id) {
-                            handleAcceptTrade(tradeDetails.trade.id);
-                          }
-                        }}
-                      >
-                        <Check color="#FFFFFF" size={20} />
-                        <Text style={styles.modalAcceptButtonText}>Accept</Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-                  {tradeDetails.trade?.status === 'accepted' && (
-                    <TouchableOpacity style={styles.modalMessageButton}>
-                      <MessageCircle color="#FFFFFF" size={20} />
-                      <Text style={styles.modalMessageText}>Message {tradeDetails.proposer?.name}</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
+                    )}
+                  </View>
+                </ScrollView>
               </View>
             </View>
           )}
@@ -701,6 +1082,8 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 5,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
   },
   tradeHeader: {
     flexDirection: 'row',
@@ -709,6 +1092,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#F0F0F0',
+    backgroundColor: '#FAFAFA',
   },
   userInfo: {
     flexDirection: 'row',
@@ -719,6 +1103,8 @@ const styles = StyleSheet.create({
     height: 40,
     borderRadius: 20,
     marginRight: 12,
+    borderWidth: 2,
+    borderColor: '#22C55E',
   },
   username: {
     fontSize: 16,
@@ -726,30 +1112,38 @@ const styles = StyleSheet.create({
     color: '#333333',
   },
   statusContainer: {
-    padding: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 16,
-    backgroundColor: '#F2F2F7',
   },
   statusBadge: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#333333',
+    color: '#FFFFFF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
   },
   tradeContent: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 16,
+    backgroundColor: '#FFFFFF',
   },
   tradeItem: {
     alignItems: 'center',
     width: '40%',
+    backgroundColor: '#F9F9F9',
+    borderRadius: 12,
+    padding: 12,
   },
   itemImage: {
     width: 100,
     height: 100,
     borderRadius: 12,
     marginBottom: 12,
+    backgroundColor: '#E0E0E0',
   },
   itemName: {
     fontSize: 16,
@@ -760,11 +1154,16 @@ const styles = StyleSheet.create({
   },
   tradeDirection: {
     fontSize: 14,
-    color: '#999999',
+    color: '#666666',
     textAlign: 'center',
   },
   tradeArrow: {
     alignItems: 'center',
+    backgroundColor: '#F0F0F0',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
   },
   tradeFooter: {
     flexDirection: 'row',
@@ -773,13 +1172,17 @@ const styles = StyleSheet.create({
     padding: 16,
     borderTopWidth: 1,
     borderTopColor: '#F0F0F0',
+    backgroundColor: '#FAFAFA',
   },
   tradeDate: {
     fontSize: 14,
-    color: '#999999',
+    color: '#666666',
   },
   detailsButton: {
-    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     borderRadius: 8,
     backgroundColor: '#22C55E',
   },
@@ -787,6 +1190,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
+    marginLeft: 6,
   },
   emptyContainer: {
     flex: 1,
@@ -815,12 +1219,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
+    backgroundColor: '#FFFFFF',
   },
   errorText: {
+    fontSize: 18,
+    fontWeight: 'bold',
     color: '#FF3B30',
-    fontSize: 16,
-    marginTop: 12,
-    marginBottom: 20,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  errorSubtext: {
+    fontSize: 14,
+    color: '#666666',
     textAlign: 'center',
   },
   retryButton: {
@@ -844,13 +1254,16 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 20,
-    maxHeight: '80%',
+    maxHeight: '90%',
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 20,
+    paddingBottom: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
   },
   modalTitle: {
     fontSize: 20,
@@ -858,13 +1271,23 @@ const styles = StyleSheet.create({
     color: '#333333',
   },
   modalBody: {
-    paddingBottom: 20,
+    paddingBottom: 10,
+  },
+  modalScrollView: {
+    flexGrow: 0,
+  },
+  modalScrollContent: {
+    flexGrow: 1,
+    paddingBottom: 10,
   },
   tradeParties: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 15,
+    backgroundColor: '#F9F9F9',
+    borderRadius: 12,
+    padding: 16,
   },
   tradeParty: {
     alignItems: 'center',
@@ -875,24 +1298,35 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 30,
     marginBottom: 8,
+    borderWidth: 2,
+    borderColor: '#22C55E',
   },
   partyName: {
     fontSize: 16,
     fontWeight: '600',
     color: '#333333',
   },
+  partyRole: {
+    fontSize: 14,
+    color: '#666666',
+    marginTop: 4,
+  },
   tradeDirectionContainer: {
     width: '20%',
     alignItems: 'center',
+    backgroundColor: '#F0F0F0',
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
   },
   tradeDirectionText: {
     fontSize: 24,
-    color: '#999999',
+    color: '#666666',
   },
   tradeItems: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 20,
+    marginBottom: 15,
   },
   detailItemContainer: {
     alignItems: 'center',
@@ -906,6 +1340,7 @@ const styles = StyleSheet.create({
     height: 120,
     borderRadius: 12,
     marginBottom: 12,
+    backgroundColor: '#E0E0E0',
   },
   detailItemName: {
     fontSize: 16,
@@ -915,20 +1350,21 @@ const styles = StyleSheet.create({
   },
   detailItemLabel: {
     fontSize: 14,
-    color: '#999999',
+    color: '#666666',
     textAlign: 'center',
     marginTop: 4,
   },
   tradeInfo: {
     backgroundColor: '#F9F9F9',
     borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
+    padding: 12,
+    marginBottom: 8,
   },
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 6,
+    paddingVertical: 3,
   },
   infoLabel: {
     fontSize: 14,
@@ -942,7 +1378,7 @@ const styles = StyleSheet.create({
   modalActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 20,
+    marginTop: 8,
   },
   modalActionButton: {
     flex: 1,
@@ -955,6 +1391,8 @@ const styles = StyleSheet.create({
   modalRejectButton: {
     backgroundColor: '#F9F9F9',
     marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#FF3B30',
   },
   modalRejectButtonText: {
     color: '#FF3B30',
@@ -973,7 +1411,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   modalMessageButton: {
-    backgroundColor: '#22C55E',
+    backgroundColor: '#FF9500',
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
@@ -986,21 +1424,174 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginLeft: 8,
   },
+  detailCashBadge: {
+    backgroundColor: '#22C55E',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  detailCashText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
     justifyContent: 'center',
   },
   proposeButton: {
-    backgroundColor: '#5856D6',
+    backgroundColor: '#FF9500',
   },
   actionButtonText: {
     color: '#FFFFFF',
-    marginLeft: 4,
     fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  cashBadge: {
+    backgroundColor: '#22C55E',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  cashText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  cashInputContainer: {
+    marginTop: 20,
+    marginBottom: 20,
+    backgroundColor: '#F9F9F9',
+    borderRadius: 12,
+    padding: 16,
+  },
+  cashInputLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333333',
+    marginBottom: 8,
+  },
+  cashInputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    paddingHorizontal: 12,
+    height: 50,
+  },
+  cashSuffix: {
+    fontSize: 16,
+    color: '#333333',
+    marginLeft: 4,
     fontWeight: '500',
+  },
+  cashInput: {
+    flex: 1,
+    fontSize: 18,
+    color: '#333333',
+    height: 50,
+    textAlign: 'right',
+    paddingRight: 8,
+  },
+  cashInputHint: {
+    fontSize: 12,
+    color: '#999999',
+    marginTop: 8,
+  },
+  submitButton: {
+    backgroundColor: '#22C55E',
+    borderRadius: 8,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalAmendButton: {
+    backgroundColor: '#22C55E',
+    marginLeft: 10,
+  },
+  modalAmendButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    marginLeft: 8,
+  },
+  disabledAvatar: {
+    opacity: 0.7,
+  },
+  avatarContainer: {
+    position: 'relative',
+  },
+  chatIconOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#FF9500',
+    borderRadius: 12,
+    padding: 4,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  likedItemContent: {
+    padding: 16,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  likedItem: {
+    alignItems: 'center',
+    width: '80%',
+    backgroundColor: '#F9F9F9',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#22C55E',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  likedItemImage: {
+    width: 160,
+    height: 160,
+    borderRadius: 12,
+    marginBottom: 12,
+    backgroundColor: '#E0E0E0',
+  },
+  likedItemImageContainer: {
+    position: 'relative',
+  },
+  categoryPill: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: '#22C55E',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 1.5,
+    elevation: 2,
+  },
+  categoryText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    textTransform: 'capitalize',
   },
 });
