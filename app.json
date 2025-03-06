@@ -10,19 +10,11 @@
       "resizeMode": "contain",
       "backgroundColor": "#FFFFFF"
     },
-    "scheme": "barter",
+    "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.rindah89.barter"
-    },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#FFFFFF"
-      },
-      "package": "com.rindah89.barter"
+      "supportsTablet": true
     },
     "web": {
       "bundler": "metro",
@@ -48,14 +40,6 @@
     ],
     "experiments": {
       "typedRoutes": true
-    },
-    "extra": {
-      "router": {
-        "origin": false
-      },
-      "eas": {
-        "projectId": "barter"
-      }
     }
   }
 }

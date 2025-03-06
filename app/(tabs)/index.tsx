@@ -9,9 +9,15 @@ import {
   TouchableOpacity,
   StatusBar,
   Modal,
+  ScrollView,
+  TextInput,
+  Keyboard,
+  FlatList,
+  RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Heart, X, Filter, LucidePackage, Info, Search, RotateCcw, User } from 'lucide-react-native';
+import { Heart, X, Filter, LucidePackage, Info, Search, RotateCcw, User, ArrowLeft, Grid, Layers, Star } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { Item } from '../../lib/supabase';
 import { useRouter } from 'expo-router';
@@ -30,6 +36,108 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 const SWIPE_THRESHOLD = 120;
 const PAGE_SIZE = 10;
 
+// View mode enum
+enum ViewMode {
+  SWIPE = 'swipe',
+  LIST = 'list'
+}
+
+// Media Carousel Component
+const MediaCarousel = ({ mediaFiles, mainImage }: { mediaFiles: string[], mainImage: string | null }) => {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const allMedia = mainImage ? [mainImage, ...mediaFiles] : mediaFiles;
+  const mediaToShow = allMedia.slice(0, 5); // Show max 5 media files
+  
+  // Auto-rotation timer
+  useEffect(() => {
+    if (mediaToShow.length <= 1) return;
+    
+    const timer = setInterval(() => {
+      const nextIndex = (activeIndex + 1) % mediaToShow.length;
+      setActiveIndex(nextIndex);
+      scrollViewRef.current?.scrollTo({
+        x: nextIndex * SCREEN_WIDTH,
+        animated: true
+      });
+    }, 3000);
+    
+    return () => clearInterval(timer);
+  }, [activeIndex, mediaToShow.length]);
+  
+  if (mediaToShow.length === 0) {
+    return (
+      <ExpoImage 
+        source={{ uri: 'https://via.placeholder.com/300' }} 
+        style={styles.listItemImage} 
+        cachePolicy="disk" 
+      />
+    );
+  }
+  
+  if (mediaToShow.length === 1) {
+    return (
+      <ExpoImage 
+        source={{ uri: getSupabaseFileUrl(mediaToShow[0]) }} 
+        style={styles.listItemImage} 
+        cachePolicy="disk" 
+      />
+    );
+  }
+  
+  const handleScroll = (event: any) => {
+    const contentOffset = event.nativeEvent.contentOffset;
+    const viewSize = event.nativeEvent.layoutMeasurement;
+    const pageNum = Math.floor(contentOffset.x / viewSize.width);
+    setActiveIndex(pageNum);
+  };
+  
+  return (
+    <View style={styles.carouselContainer}>
+      <ScrollView
+        ref={scrollViewRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        style={styles.carousel}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
+        decelerationRate="fast"
+      >
+        {mediaToShow.map((media, index) => (
+          <View key={index} style={[styles.carouselItem, { width: SCREEN_WIDTH }]}>
+            <ExpoImage 
+              source={{ uri: getSupabaseFileUrl(media) }} 
+              style={styles.carouselImage} 
+              cachePolicy="disk" 
+            />
+          </View>
+        ))}
+      </ScrollView>
+      {mediaToShow.length > 1 && (
+        <View style={styles.carouselIndicators}>
+          {mediaToShow.map((_, index) => (
+            <TouchableOpacity 
+              key={index} 
+              style={[
+                styles.carouselDot,
+                index === activeIndex ? styles.carouselDotActive : null
+              ]} 
+              onPress={() => {
+                setActiveIndex(index);
+                scrollViewRef.current?.scrollTo({
+                  x: index * SCREEN_WIDTH,
+                  animated: true
+                });
+              }}
+            />
+          ))}
+        </View>
+      )}
+    </View>
+  );
+};
+
 export default function DiscoverScreen() {
   const [items, setItems] = useState<Item[]>([]);
   const [ownerProfiles, setOwnerProfiles] = useState<{ [key: string]: any }>({});
@@ -39,6 +147,15 @@ export default function DiscoverScreen() {
   const [hasMore, setHasMore] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [showFilterModal, setShowFilterModal] = useState(false);
+  const [showSearchModal, setShowSearchModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Item[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.LIST);
+  const [likedItems, setLikedItems] = useState<string[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const searchInputRef = useRef<TextInput>(null);
+  const flatListRef = useRef<FlatList>(null);
   const position = useRef(new Animated.ValueXY()).current;
   const pulseAnim = useRef(new Animated.Value(0)).current;
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -53,11 +170,34 @@ export default function DiscoverScreen() {
   const { setIsLoading } = useLoading();
 
   // Predefined categories (fetch dynamically if possible)
-  const categories = ['Electronics', 'Fashion', 'Home', 'Sports', 'Books', 'Other'];
+  const categories = ['All', 'Electronics', 'Fashion', 'Home', 'Sports', 'Books', 'Toys', 'Art', 'Other'];
+
+  // Fetch user's liked items
+  const fetchLikedItems = async () => {
+    if (!user?.id) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from('liked_items')
+        .select('item_id')
+        .eq('user_id', user.id);
+        
+      if (error) {
+        console.error('Error fetching liked items:', error);
+        return;
+      }
+      
+      const likedItemIds = data.map(item => item.item_id);
+      setLikedItems(likedItemIds);
+    } catch (err) {
+      console.error('Error in fetchLikedItems:', err);
+    }
+  };
 
   // Fetch items and profiles
   useEffect(() => {
     fetchItems();
+    fetchLikedItems();
   }, [categoryFilter]);
 
   useEffect(() => {
@@ -87,21 +227,45 @@ export default function DiscoverScreen() {
         return;
       }
 
+      // First, fetch the user's liked items
+      const { data: likedItems, error: likedItemsError } = await supabase
+        .from('liked_items')
+        .select('item_id')
+        .eq('user_id', userId);
+
+      if (likedItemsError) {
+        console.error('Error fetching liked items:', likedItemsError);
+      }
+
+      // Extract the item IDs that the user has liked
+      const likedItemIds = likedItems?.map(item => item.item_id) || [];
+
       let query = supabase
         .from('items')
         .select('*')
         .eq('is_available', true)
         .neq('user_id', userId);
 
-      if (categoryFilter) query = query.eq('category', categoryFilter);
+      // Add filter to exclude liked items if there are any
+      if (likedItemIds.length > 0) {
+        query = query.not('id', 'in', `(${likedItemIds.join(',')})`);
+      }
 
-      const { data: itemsData, error: itemsError } = await query.range(0, PAGE_SIZE - 1);
+      // Apply category filter if selected
+      if (categoryFilter) {
+        query = query.eq('category', categoryFilter);
+      }
+
+      const { data: itemsData, error: itemsError } = await query
+        .order('created_at', { ascending: false })
+        .range(0, PAGE_SIZE - 1);
 
       if (itemsError) throw itemsError;
 
       setItems(itemsData as Item[]);
       setPage(1);
       setHasMore(itemsData.length === PAGE_SIZE);
+      setCurrentIndex(0);
 
       const userIds = [...new Set(itemsData.map((item) => item.user_id))];
       const { data: profilesData, error: profilesError } = await supabase
@@ -130,15 +294,39 @@ export default function DiscoverScreen() {
     setLoading(true);
     try {
       const nextPage = page + 1;
+      
+      // First, fetch the user's liked items
+      const { data: likedItems, error: likedItemsError } = await supabase
+        .from('liked_items')
+        .select('item_id')
+        .eq('user_id', user?.id);
+
+      if (likedItemsError) {
+        console.error('Error fetching liked items:', likedItemsError);
+      }
+
+      // Extract the item IDs that the user has liked
+      const likedItemIds = likedItems?.map(item => item.item_id) || [];
+      
       let query = supabase
         .from('items')
         .select('*')
         .eq('is_available', true)
         .neq('user_id', user?.id);
 
-      if (categoryFilter) query = query.eq('category', categoryFilter);
+      // Add filter to exclude liked items if there are any
+      if (likedItemIds.length > 0) {
+        query = query.not('id', 'in', `(${likedItemIds.join(',')})`);
+      }
 
-      const { data: newItems, error } = await query.range((nextPage - 1) * PAGE_SIZE, nextPage * PAGE_SIZE - 1);
+      // Apply category filter if selected
+      if (categoryFilter) {
+        query = query.eq('category', categoryFilter);
+      }
+
+      const { data: newItems, error } = await query
+        .order('created_at', { ascending: false })
+        .range((nextPage - 1) * PAGE_SIZE, nextPage * PAGE_SIZE - 1);
 
       if (error) throw error;
 
@@ -267,16 +455,31 @@ export default function DiscoverScreen() {
     // Add item to liked items
     if (currentItem && user?.id) {
       try {
-        const { error } = await supabase
+        // Check if the item is already liked to avoid duplicate entries
+        const { data, error: checkError } = await supabase
           .from('liked_items')
-          .upsert({
-            user_id: user.id,
-            item_id: currentItem.id,
-            created_at: new Date().toISOString()
-          });
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('item_id', currentItem.id)
+          .single();
           
-        if (error) {
-          console.error('Error adding item to liked items:', error);
+        if (checkError && checkError.code !== 'PGRST116') { // PGRST116 is "no rows returned" error
+          console.error('Error checking liked item:', checkError);
+        }
+        
+        // Only add to liked items if not already liked
+        if (!data) {
+          const { error } = await supabase
+            .from('liked_items')
+            .upsert({
+              user_id: user.id,
+              item_id: currentItem.id,
+              created_at: new Date().toISOString()
+            });
+            
+          if (error) {
+            console.error('Error adding item to liked items:', error);
+          }
         }
       } catch (error) {
         console.error('Error in swipeRight:', error);
@@ -295,7 +498,43 @@ export default function DiscoverScreen() {
     });
   };
 
-  const swipeLeft = () => {
+  const swipeLeft = async () => {
+    // Get the current item being swiped
+    const currentItem = items[currentIndex];
+    
+    // Remove item from liked items if it exists
+    if (currentItem && user?.id) {
+      try {
+        // Check if the item is already liked
+        const { data, error: checkError } = await supabase
+          .from('liked_items')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('item_id', currentItem.id)
+          .single();
+          
+        if (checkError && checkError.code !== 'PGRST116') { // PGRST116 is "no rows returned" error
+          console.error('Error checking liked item:', checkError);
+        }
+        
+        // If the item is liked, remove it
+        if (data) {
+          const { error: deleteError } = await supabase
+            .from('liked_items')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('item_id', currentItem.id);
+            
+          if (deleteError) {
+            console.error('Error removing item from liked items:', deleteError);
+          }
+        }
+      } catch (error) {
+        console.error('Error in swipeLeft:', error);
+      }
+    }
+    
+    // Continue with animation
     Animated.timing(position, { 
       toValue: { x: -SCREEN_WIDTH - 100, y: lastGesture.dy }, 
       duration: 300, 
@@ -315,8 +554,6 @@ export default function DiscoverScreen() {
   const handleRefresh = () => {
     setRefreshing(true);
     setCurrentIndex(0);
-    setPage(1);
-    setHasMore(true);
     fetchItems();
   };
 
@@ -385,8 +622,26 @@ export default function DiscoverScreen() {
               style={styles.lottieAnimation}
             />
           </View>
-          <Text style={styles.emptyTitle}>No Items Available</Text>
-          <Text style={styles.emptyText}>There are no items available for trading at the moment.</Text>
+          <Text style={styles.emptyTitle}>
+            {categoryFilter 
+              ? `No ${categoryFilter} Items Available` 
+              : 'No Items Available'}
+          </Text>
+          <Text style={styles.emptyText}>
+            {categoryFilter 
+              ? `There are no ${categoryFilter.toLowerCase()} items available for trading at the moment.` 
+              : 'There are no items available for trading at the moment.'}
+          </Text>
+          {categoryFilter && (
+            <TouchableOpacity 
+              style={styles.clearFilterButton} 
+              onPress={() => {
+                setCategoryFilter(null);
+              }}
+            >
+              <Text style={styles.clearFilterText}>Clear Filter</Text>
+            </TouchableOpacity>
+          )}
         </View>
       );
     }
@@ -395,11 +650,31 @@ export default function DiscoverScreen() {
       return (
         <View style={styles.emptyContainer}>
           <RotateCcw color="#22C55E" size={64} />
-          <Text style={styles.emptyTitle}>No More Items</Text>
-          <Text style={styles.emptyText}>You've viewed all available items. Refresh for more!</Text>
-          <TouchableOpacity style={styles.refreshButton} onPress={handleRefresh}>
-            <Text style={styles.refreshButtonText}>Refresh</Text>
-          </TouchableOpacity>
+          <Text style={styles.emptyTitle}>
+            {categoryFilter 
+              ? `No More ${categoryFilter} Items` 
+              : 'No More Items'}
+          </Text>
+          <Text style={styles.emptyText}>
+            {categoryFilter 
+              ? `You've viewed all available ${categoryFilter.toLowerCase()} items.` 
+              : "You've viewed all available items. Refresh for more!"}
+          </Text>
+          <View style={styles.emptyActionButtons}>
+            <TouchableOpacity style={styles.refreshButton} onPress={handleRefresh}>
+              <Text style={styles.refreshButtonText}>Refresh</Text>
+            </TouchableOpacity>
+            {categoryFilter && (
+              <TouchableOpacity 
+                style={styles.clearFilterButton} 
+                onPress={() => {
+                  setCategoryFilter(null);
+                }}
+              >
+                <Text style={styles.clearFilterText}>Clear Filter</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       );
     }
@@ -460,6 +735,7 @@ export default function DiscoverScreen() {
             </Animated.View>
             <ExpoImage source={{ uri: imageUri }} style={styles.image} cachePolicy="disk" />
             <View style={styles.categoryBadge}>
+              <LucidePackage color="#FFFFFF" size={14} style={styles.categoryIcon} />
               <Text style={styles.categoryBadgeText}>{item.category || 'Uncategorized'}</Text>
             </View>
             <View style={styles.cardContent}>
@@ -467,16 +743,17 @@ export default function DiscoverScreen() {
               <Text style={styles.description} numberOfLines={2}>{item.description || 'No description'}</Text>
               <View style={styles.ownerContainer}>
                 <ExpoImage
-                  source={{ uri: owner.avatar_url ? getSupabaseFileUrl(owner.avatar_url) : 'https://via.placeholder.com/40' }}
+                  source={{ uri: owner.avatar_url ? getSupabaseFileUrl(owner.avatar_url) : getDefaultAvatar() }}
                   style={styles.ownerAvatar}
                   cachePolicy="disk"
                 />
                 <View style={styles.ownerInfo}>
                   <Text style={styles.ownerName}>{owner.name || 'Unknown User'}</Text>
-                  <Text style={styles.ownerStats} numberOfLines={1}>
-                    {owner.location || 'No location'} • Rating: {owner.rating || 'N/A'} • {owner.completed_trades || 0}{' '}
-                    trades
-                  </Text>
+                  <View style={styles.ownerRatingContainer}>
+                    {renderStarRating(owner.rating, 14)}
+                    <Text style={styles.ownerTradesText}>{owner.completed_trades || 0} trades</Text>
+                  </View>
+                  <Text style={styles.ownerLocation}>{owner.location || 'No location'}</Text>
                 </View>
               </View>
               
@@ -517,6 +794,7 @@ export default function DiscoverScreen() {
           >
             <ExpoImage source={{ uri: imageUri }} style={styles.image} cachePolicy="disk" />
             <View style={styles.categoryBadge}>
+              <LucidePackage color="#FFFFFF" size={14} style={styles.categoryIcon} />
               <Text style={styles.categoryBadgeText}>{item.category || 'Uncategorized'}</Text>
             </View>
             <View style={styles.cardContent}>
@@ -524,16 +802,17 @@ export default function DiscoverScreen() {
               <Text style={styles.description} numberOfLines={2}>{item.description || 'No description'}</Text>
               <View style={styles.ownerContainer}>
                 <ExpoImage
-                  source={{ uri: owner.avatar_url ? getSupabaseFileUrl(owner.avatar_url) : 'https://via.placeholder.com/40' }}
+                  source={{ uri: owner.avatar_url ? getSupabaseFileUrl(owner.avatar_url) : getDefaultAvatar() }}
                   style={styles.ownerAvatar}
                   cachePolicy="disk"
                 />
                 <View style={styles.ownerInfo}>
                   <Text style={styles.ownerName}>{owner.name || 'Unknown User'}</Text>
-                  <Text style={styles.ownerStats} numberOfLines={1}>
-                    {owner.location || 'No location'} • Rating: {owner.rating || 'N/A'} • {owner.completed_trades || 0}{' '}
-                    trades
-                  </Text>
+                  <View style={styles.ownerRatingContainer}>
+                    {renderStarRating(owner.rating, 14)}
+                    <Text style={styles.ownerTradesText}>{owner.completed_trades || 0} trades</Text>
+                  </View>
+                  <Text style={styles.ownerLocation}>{owner.location || 'No location'}</Text>
                 </View>
               </View>
               
@@ -569,6 +848,497 @@ export default function DiscoverScreen() {
     }).reverse();
   };
 
+  // Search function
+  const handleSearch = async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    try {
+      setIsSearching(true);
+      const { data: session } = await supabase.auth.getSession();
+      const userId = session?.session?.user?.id;
+
+      if (!userId) {
+        setError('User not authenticated');
+        return;
+      }
+
+      // Search in name and description fields
+      const { data, error } = await supabase
+        .from('items')
+        .select('*')
+        .eq('is_available', true)
+        .neq('user_id', userId)
+        .or(`name.ilike.%${query}%,description.ilike.%${query}%`)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (error) throw error;
+
+      setSearchResults(data as Item[]);
+
+      // Fetch owner profiles for search results
+      if (data.length > 0) {
+        const userIds = [...new Set(data.map((item) => item.user_id))];
+        const { data: profilesData, error: profilesError } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', userIds);
+
+        if (profilesError) throw profilesError;
+
+        const profilesMap = profilesData.reduce((acc, profile) => {
+          acc[profile.id] = profile;
+          return acc;
+        }, { ...ownerProfiles });
+        setOwnerProfiles(profilesMap);
+      }
+    } catch (err) {
+      console.error('Error searching items:', err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  // Debounce search to avoid too many requests
+  useEffect(() => {
+    const debounceTimeout = setTimeout(() => {
+      if (searchQuery.trim()) {
+        handleSearch(searchQuery);
+      }
+    }, 500);
+
+    return () => clearTimeout(debounceTimeout);
+  }, [searchQuery]);
+
+  // Focus search input when modal opens
+  useEffect(() => {
+    if (showSearchModal && searchInputRef.current) {
+      setTimeout(() => {
+        searchInputRef.current?.focus();
+      }, 100);
+    }
+  }, [showSearchModal]);
+
+  // Reset search when modal closes
+  const handleCloseSearch = () => {
+    setShowSearchModal(false);
+    setSearchQuery('');
+    setSearchResults([]);
+    Keyboard.dismiss();
+  };
+
+  // Render search result item
+  const renderSearchResultItem = ({ item }: { item: Item }) => {
+    const owner = ownerProfiles[item.user_id] || {};
+    const imageUri = item.image_url
+      ? getSupabaseFileUrl(item.image_url)
+      : 'https://via.placeholder.com/300';
+
+    return (
+      <TouchableOpacity 
+        style={styles.searchResultItem} 
+        onPress={() => {
+          handleCloseSearch();
+          navigateToItemDetails(item.id);
+        }}
+      >
+        <ExpoImage 
+          source={{ uri: imageUri }} 
+          style={styles.searchResultImage} 
+          cachePolicy="disk" 
+        />
+        <View style={styles.searchResultContent}>
+          <Text style={styles.searchResultName} numberOfLines={1}>{item.name}</Text>
+          <Text style={styles.searchResultDescription} numberOfLines={2}>
+            {item.description || 'No description'}
+          </Text>
+          <View style={styles.searchResultOwner}>
+            <Text style={styles.searchResultOwnerName} numberOfLines={1}>
+              Owner: {owner.name || 'Unknown User'}
+            </Text>
+            {item.category && (
+              <View style={styles.searchResultCategory}>
+                <Text style={styles.searchResultCategoryText}>{item.category}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  // Handle refresh for grid view
+  const handleGridRefresh = async () => {
+    setRefreshing(true);
+    setPage(1);
+    await fetchItems();
+    setRefreshing(false);
+  };
+
+  // Handle end reached for grid view
+  const handleEndReached = () => {
+    if (!hasMore || loading || loadingMore) return;
+    loadMoreItemsForGrid();
+  };
+
+  // Load more items for grid view
+  const loadMoreItemsForGrid = async () => {
+    if (!hasMore || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const nextPage = page + 1;
+      
+      // First, fetch the user's liked items
+      const { data: likedItems, error: likedItemsError } = await supabase
+        .from('liked_items')
+        .select('item_id')
+        .eq('user_id', user?.id);
+
+      if (likedItemsError) {
+        console.error('Error fetching liked items:', likedItemsError);
+      }
+
+      // Extract the item IDs that the user has liked
+      const likedItemIds = likedItems?.map(item => item.item_id) || [];
+      
+      let query = supabase
+        .from('items')
+        .select('*')
+        .eq('is_available', true)
+        .neq('user_id', user?.id);
+
+      // Add filter to exclude liked items if there are any
+      if (likedItemIds.length > 0) {
+        query = query.not('id', 'in', `(${likedItemIds.join(',')})`);
+      }
+
+      // Apply category filter if selected
+      if (categoryFilter) {
+        query = query.eq('category', categoryFilter);
+      }
+
+      const { data: newItems, error } = await query
+        .order('created_at', { ascending: false })
+        .range((nextPage - 1) * PAGE_SIZE, nextPage * PAGE_SIZE - 1);
+
+      if (error) throw error;
+
+      if (newItems.length > 0) {
+        setItems((prev) => [...prev, ...newItems]);
+        setPage(nextPage);
+        setHasMore(newItems.length === PAGE_SIZE);
+
+        const userIds = [...new Set(newItems.map((item) => item.user_id))];
+        const { data: profilesData, error: profilesError } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', userIds);
+
+        if (profilesError) throw profilesError;
+
+        const profilesMap = profilesData.reduce((acc, profile) => {
+          acc[profile.id] = profile;
+          return acc;
+        }, { ...ownerProfiles });
+        setOwnerProfiles(profilesMap);
+      } else {
+        setHasMore(false);
+      }
+    } catch (err) {
+      console.error('Error loading more items:', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  // Toggle view mode
+  const toggleViewMode = () => {
+    setViewMode(prevMode => 
+      prevMode === ViewMode.LIST ? ViewMode.SWIPE : ViewMode.LIST
+    );
+  };
+
+  // Toggle like status
+  const toggleLike = async (itemId: string) => {
+    if (!user?.id) return;
+    
+    try {
+      // Check if already liked
+      const isLiked = likedItems.includes(itemId);
+      
+      if (isLiked) {
+        // Unlike the item
+        const { error } = await supabase
+          .from('liked_items')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('item_id', itemId);
+          
+        if (error) {
+          console.error('Error removing item from liked items:', error);
+          return;
+        }
+        
+        // Update local state
+        setLikedItems(prev => prev.filter(id => id !== itemId));
+      } else {
+        // Like the item
+        const { error } = await supabase
+          .from('liked_items')
+          .upsert({
+            user_id: user.id,
+            item_id: itemId,
+            created_at: new Date().toISOString()
+          });
+          
+        if (error) {
+          console.error('Error adding item to liked items:', error);
+          return;
+        }
+        
+        // Update local state
+        setLikedItems(prev => [...prev, itemId]);
+      }
+    } catch (error) {
+      console.error('Error in toggleLike:', error);
+    }
+  };
+
+  // Format date
+  const formatDate = (dateString: string) => {
+    if (!dateString) return 'Recently';
+    
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays < 7) return `${diffDays}d ago`;
+    
+    return date.toLocaleDateString();
+  };
+
+  // Render list item
+  const renderListItem = ({ item }: { item: Item }) => {
+    const owner = ownerProfiles[item.user_id] || {};
+    const isLiked = likedItems.includes(item.id);
+    
+    // Get media files
+    const mediaFiles = item.media_files || [];
+
+    return (
+      <View style={styles.listItem}>
+        {/* User header */}
+        <View style={styles.listItemHeader}>
+          <ExpoImage
+            source={{ uri: owner.avatar_url ? getSupabaseFileUrl(owner.avatar_url) : getDefaultAvatar() }}
+            style={styles.listItemAvatar}
+            cachePolicy="disk"
+          />
+          <View style={styles.listItemUserInfo}>
+            <Text style={styles.listItemUsername}>{owner.name || 'Unknown User'}</Text>
+            {owner.email && (
+              <Text style={styles.listItemEmail}>{owner.email}</Text>
+            )}
+          </View>
+          <View style={styles.listItemMeta}>
+            <Text style={styles.listItemLocation}>{owner.location || 'No location'}</Text>
+            <Text style={styles.listItemDot}>•</Text>
+            <Text style={styles.listItemTimestamp}>{formatDate(item.created_at)}</Text>
+          </View>
+        </View>
+        
+        {/* Item media */}
+        <View style={styles.listItemMediaContainer}>
+          <MediaCarousel mediaFiles={mediaFiles} mainImage={item.image_url} />
+          
+          {/* Category badge overlay */}
+          <View style={styles.listItemCategoryBadge}>
+            <LucidePackage color="#FFFFFF" size={12} style={styles.listItemCategoryIcon} />
+            <Text style={styles.listItemCategoryText}>{item.category || 'Uncategorized'}</Text>
+          </View>
+          
+          {/* Transparent overlay for item details navigation */}
+          <TouchableOpacity 
+            style={styles.listItemMediaOverlay}
+            activeOpacity={1}
+            onPress={() => navigateToItemDetails(item.id)}
+          />
+        </View>
+        
+        {/* Item content */}
+        <View style={styles.listItemContent}>
+          <Text style={styles.listItemName}>{item.name}</Text>
+          <Text style={styles.listItemDescription} numberOfLines={3}>
+            {item.description || 'No description'}
+          </Text>
+          
+          {/* Stats */}
+          <View style={styles.listItemStats}>
+            <View style={styles.listItemStat}>
+              {renderStarRating(owner.rating)}
+              <Text style={styles.listItemStatLabel}>Rating</Text>
+            </View>
+            <View style={styles.listItemStat}>
+              <Text style={styles.listItemStatValue}>{owner.completed_trades || 0}</Text>
+              <Text style={styles.listItemStatLabel}>Trades</Text>
+            </View>
+          </View>
+          
+          {/* Actions */}
+          <View style={styles.listItemActions}>
+            <TouchableOpacity 
+              style={styles.listItemLikeButton}
+              onPress={() => toggleLike(item.id)}
+            >
+              <Heart 
+                color="#22C55E" 
+                size={24} 
+                fill={isLiked ? "#22C55E" : "transparent"} 
+              />
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.listItemDetailsButton}
+              onPress={() => navigateToItemDetails(item.id)}
+            >
+              <Text style={styles.listItemDetailsText}>View Details</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
+  // Render list view
+  const renderListView = () => {
+    if (loading && !refreshing) {
+      return (
+        <View style={styles.loadingContainer}>
+          <LoadingIndicator size="large" color="#22C55E" />
+        </View>
+      );
+    }
+
+    if (error) {
+      return (
+        <View style={styles.errorContainer}>
+          <Info color="#FF3B30" size={48} />
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.errorButton} onPress={fetchItems}>
+            <Text style={styles.errorButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    if (items.length === 0) {
+      return (
+        <View style={styles.emptyContainer}>
+          <View style={styles.lottieContainer}>
+            <LottieView
+              ref={lottieRef}
+              source={require('../../assets/home.json')}
+              autoPlay
+              loop
+              style={styles.lottieAnimation}
+            />
+          </View>
+          <Text style={styles.emptyTitle}>
+            {categoryFilter 
+              ? `No ${categoryFilter} Items Available` 
+              : 'No Items Available'}
+          </Text>
+          <Text style={styles.emptyText}>
+            {categoryFilter 
+              ? `There are no ${categoryFilter.toLowerCase()} items available for trading at the moment.` 
+              : 'There are no items available for trading at the moment.'}
+          </Text>
+          {categoryFilter && (
+            <TouchableOpacity 
+              style={styles.clearFilterButton} 
+              onPress={() => {
+                setCategoryFilter(null);
+              }}
+            >
+              <Text style={styles.clearFilterText}>Clear Filter</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      );
+    }
+
+    return (
+      <FlatList
+        ref={flatListRef}
+        data={items}
+        renderItem={renderListItem}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContainer}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleGridRefresh}
+            colors={['#22C55E']}
+            tintColor="#22C55E"
+          />
+        }
+        onEndReached={handleEndReached}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={
+          loadingMore ? (
+            <View style={styles.loadMoreIndicator}>
+              <ActivityIndicator size="small" color="#22C55E" />
+              <Text style={styles.loadMoreText}>Loading more items...</Text>
+            </View>
+          ) : hasMore ? (
+            <View style={styles.loadMoreIndicator}>
+              <Text style={styles.loadMoreHint}>Scroll for more items</Text>
+            </View>
+          ) : (
+            <View style={styles.loadMoreIndicator}>
+              <Text style={styles.loadMoreEnd}>You've reached the end</Text>
+            </View>
+          )
+        }
+      />
+    );
+  };
+
+  // Render star rating
+  const renderStarRating = (rating: number | null, size: number = 16) => {
+    const ratingValue = rating || 0;
+    const maxRating = 5;
+    const stars = [];
+    
+    for (let i = 1; i <= maxRating; i++) {
+      stars.push(
+        <Star 
+          key={i} 
+          size={size} 
+          color="#22C55E" 
+          fill={i <= ratingValue ? "#22C55E" : "transparent"} 
+          style={{ marginRight: i < maxRating ? 2 : 0 }}
+        />
+      );
+    }
+    
+    return (
+      <View style={styles.starRating}>
+        {stars}
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
@@ -591,55 +1361,195 @@ export default function DiscoverScreen() {
             </TouchableOpacity>
             <View style={styles.headerTitleContainer}>
               <Text style={styles.headerTitle}>Hi, {profile?.name?.split(' ')[0] || 'there'}</Text>
-              <Text style={styles.headerSubtitle}>Swipe to find items for trade</Text>
+              <Text style={styles.headerSubtitle}>
+                {categoryFilter 
+                  ? `Browsing ${categoryFilter} items` 
+                  : viewMode === ViewMode.LIST 
+                    ? 'Browse items for trade'
+                    : 'Swipe to find items for trade'}
+              </Text>
             </View>
           </View>
           <View style={styles.headerActions}>
-            <TouchableOpacity style={styles.actionButton}>
+            <TouchableOpacity 
+              style={styles.actionButton}
+              onPress={toggleViewMode}
+            >
+              {viewMode === ViewMode.LIST ? (
+                <Layers color="#FFFFFF" size={22} />
+              ) : (
+                <Grid color="#FFFFFF" size={22} />
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.actionButton}
+              onPress={() => setShowSearchModal(true)}
+            >
               <Search color="#FFFFFF" size={22} />
             </TouchableOpacity>
           </View>
         </View>
       </LinearGradient>
 
+      {/* Category Selector */}
+      <View style={styles.categorySelector}>
+        <ScrollView 
+          horizontal 
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.categorySelectorContent}
+        >
+          {categories.map((category) => (
+            <TouchableOpacity
+              key={category}
+              style={[
+                styles.categoryChip,
+                categoryFilter === category ? styles.categoryChipActive : null,
+                categoryFilter === null && category === 'All' ? styles.categoryChipActive : null,
+              ]}
+              onPress={() => {
+                setCategoryFilter(category === 'All' ? null : category);
+                setCurrentIndex(0);
+              }}
+            >
+              <Text 
+                style={[
+                  styles.categoryChipText,
+                  categoryFilter === category ? styles.categoryChipTextActive : null,
+                  categoryFilter === null && category === 'All' ? styles.categoryChipTextActive : null,
+                ]}
+              >
+                {category}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
+
+      {/* Search Modal */}
+      <Modal
+        visible={showSearchModal}
+        animationType="slide"
+        onRequestClose={handleCloseSearch}
+      >
+        <SafeAreaView style={styles.searchModalContainer}>
+          <View style={styles.searchHeader}>
+            <TouchableOpacity 
+              style={styles.searchBackButton} 
+              onPress={handleCloseSearch}
+            >
+              <ArrowLeft color="#333333" size={24} />
+            </TouchableOpacity>
+            <View style={styles.searchInputContainer}>
+              <Search color="#666666" size={20} style={styles.searchIcon} />
+              <TextInput
+                ref={searchInputRef}
+                style={styles.searchInput}
+                placeholder="Search items..."
+                placeholderTextColor="#999999"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                autoCapitalize="none"
+                returnKeyType="search"
+                clearButtonMode="while-editing"
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity 
+                  style={styles.searchClearButton} 
+                  onPress={() => setSearchQuery('')}
+                >
+                  <X color="#999999" size={16} />
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          {isSearching ? (
+            <View style={styles.searchLoadingContainer}>
+              <LoadingIndicator size="large" color="#22C55E" />
+            </View>
+          ) : searchQuery.length > 0 && searchResults.length === 0 ? (
+            <View style={styles.searchEmptyContainer}>
+              <Info color="#999999" size={48} />
+              <Text style={styles.searchEmptyText}>No items found matching "{searchQuery}"</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={searchResults}
+              renderItem={renderSearchResultItem}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={styles.searchResultsList}
+              showsVerticalScrollIndicator={false}
+              ListEmptyComponent={
+                searchQuery.length > 0 ? null : (
+                  <View style={styles.searchInitialContainer}>
+                    <Search color="#CCCCCC" size={64} />
+                    <Text style={styles.searchInitialText}>
+                      Search for items by name or description
+                    </Text>
+                  </View>
+                )
+              }
+            />
+          )}
+        </SafeAreaView>
+      </Modal>
+
       <SafeAreaView style={styles.contentContainer} edges={['bottom', 'left', 'right']}>
-        <View style={styles.cardsContainer}>{renderCards()}</View>
-        <View style={styles.actionsContainer}>
-          <TouchableOpacity style={[styles.actionButton, styles.nopeButton]} onPress={swipeLeft}>
-            <X color="#FF3B30" size={30} />
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.actionButton, styles.filterButton]} onPress={() => setShowFilterModal(true)}>
-            <Filter color="#666666" size={30} />
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.actionButton, styles.likeButton]} onPress={swipeRight}>
-            <Heart color="#22C55E" size={30} fill="#22C55E" />
-          </TouchableOpacity>
-        </View>
+        {viewMode === ViewMode.LIST ? (
+          renderListView()
+        ) : (
+          <>
+            <View style={styles.cardsContainer}>{renderCards()}</View>
+            <View style={styles.actionsContainer}>
+              <TouchableOpacity style={[styles.actionButton, styles.nopeButton]} onPress={swipeLeft}>
+                <X color="#FF3B30" size={30} />
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.actionButton, styles.filterButton]} onPress={() => setShowFilterModal(true)}>
+                <Filter color="#666666" size={30} />
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.actionButton, styles.likeButton]} onPress={swipeRight}>
+                <Heart color="#22C55E" size={30} fill="#22C55E" />
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
 
         <Modal visible={showFilterModal} transparent animationType="slide">
           <View style={styles.modalContainer}>
             <View style={styles.modalContent}>
               <Text style={styles.modalTitle}>Filter by Category</Text>
-              {categories.map((category) => (
-                <TouchableOpacity
-                  key={category}
-                  style={styles.categoryOption}
-                  onPress={() => {
-                    setCategoryFilter(category);
-                    setShowFilterModal(false);
-                  }}
-                >
-                  <Text style={styles.categoryText}>{category}</Text>
-                </TouchableOpacity>
-              ))}
+              <View style={styles.modalCategoriesGrid}>
+                {categories.map((category) => (
+                  <TouchableOpacity
+                    key={category}
+                    style={[
+                      styles.modalCategoryOption,
+                      categoryFilter === category ? styles.modalCategoryOptionActive : null,
+                      categoryFilter === null && category === 'All' ? styles.modalCategoryOptionActive : null,
+                    ]}
+                    onPress={() => {
+                      setCategoryFilter(category === 'All' ? null : category);
+                      setCurrentIndex(0);
+                      setShowFilterModal(false);
+                    }}
+                  >
+                    <Text 
+                      style={[
+                        styles.modalCategoryText,
+                        categoryFilter === category ? styles.modalCategoryTextActive : null,
+                        categoryFilter === null && category === 'All' ? styles.modalCategoryTextActive : null,
+                      ]}
+                    >
+                      {category}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
               <TouchableOpacity
-                style={styles.clearFilterButton}
-                onPress={() => {
-                  setCategoryFilter(null);
-                  setShowFilterModal(false);
-                }}
+                style={styles.closeModalButton}
+                onPress={() => setShowFilterModal(false)}
               >
-                <Text style={styles.clearFilterText}>Clear Filter</Text>
+                <Text style={styles.closeModalButtonText}>Close</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -722,7 +1632,11 @@ const styles = StyleSheet.create({
     elevation: 5,
     overflow: 'hidden',
   },
-  image: { width: '100%', height: '45%', resizeMode: 'cover' },
+  image: { 
+    width: '100%', 
+    height: '45%', 
+    resizeMode: 'cover' 
+  },
   categoryBadge: {
     position: 'absolute',
     top: 16,
@@ -731,14 +1645,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
-  categoryBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: 'bold' },
+  categoryIcon: {
+    marginRight: 4,
+  },
+  categoryBadgeText: { 
+    color: '#FFFFFF', 
+    fontSize: 12, 
+    fontWeight: 'bold' 
+  },
   cardContent: { 
     padding: 16, 
     flex: 1, 
     justifyContent: 'flex-start' 
   },
-  name: { fontSize: 22, fontWeight: 'bold', color: '#333333', marginBottom: 6 },
+  name: { 
+    fontSize: 22, 
+    fontWeight: 'bold', 
+    color: '#333333', 
+    marginBottom: 6 
+  },
   description: { 
     fontSize: 14, 
     color: '#666666', 
@@ -746,10 +1674,27 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     maxHeight: 54, // Limit to 3 lines
   },
-  ownerContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 6 },
-  ownerAvatar: { width: 40, height: 40, borderRadius: 20, marginRight: 10 },
-  ownerInfo: { flex: 1 },
-  ownerName: { fontSize: 16, fontWeight: '600', color: '#333333' },
+  ownerContainer: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    marginTop: 6,
+    marginBottom: 10,
+  },
+  ownerAvatar: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 20, 
+    marginRight: 10 
+  },
+  ownerInfo: { 
+    flex: 1 
+  },
+  ownerName: { 
+    fontSize: 16, 
+    fontWeight: '600', 
+    color: '#333333',
+    marginBottom: 2,
+  },
   ownerStats: { 
     fontSize: 11, 
     color: '#999999', 
@@ -824,21 +1769,108 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
   },
   modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 20, color: '#333333' },
-  categoryOption: { paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#EEEEEE' },
-  categoryText: { fontSize: 16, color: '#333333' },
-  clearFilterButton: { marginTop: 20, alignItems: 'center' },
-  clearFilterText: { fontSize: 16, color: '#22C55E', fontWeight: 'bold' },
+  modalCategoriesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  modalCategoryOption: {
+    width: '30%',
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: '#F5F5F5',
+    marginBottom: 10,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#EEEEEE',
+  },
+  modalCategoryOptionActive: {
+    backgroundColor: '#22C55E',
+    borderColor: '#22C55E',
+  },
+  modalCategoryText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#666666',
+    textAlign: 'center',
+  },
+  modalCategoryTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  closeModalButton: {
+    backgroundColor: '#22C55E',
+    paddingVertical: 12,
+    borderRadius: 25,
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  closeModalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
   errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
   errorText: { color: '#FF3B30', fontSize: 16, marginTop: 12, marginBottom: 20, textAlign: 'center' },
   errorButton: { backgroundColor: '#22C55E', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 25 },
   errorButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
-  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  emptyTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#333333',
+    marginTop: 20,
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#666666',
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 22,
+  },
+  emptyActionButtons: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  refreshButton: {
+    backgroundColor: '#22C55E',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 25,
+    marginHorizontal: 8,
+  },
+  refreshButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  clearFilterButton: {
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: '#22C55E',
+    marginHorizontal: 8,
+  },
+  clearFilterText: {
+    color: '#22C55E',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
   lottieContainer: { width: SCREEN_WIDTH * 0.7, height: SCREEN_WIDTH * 0.7, marginBottom: 10 },
   lottieAnimation: { width: '100%', height: '100%' },
-  emptyTitle: { fontSize: 22, fontWeight: 'bold', color: '#333333', marginTop: 10, marginBottom: 8 },
-  emptyText: { fontSize: 16, color: '#666666', marginBottom: 24, textAlign: 'center' },
-  refreshButton: { backgroundColor: '#22C55E', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 25 },
-  refreshButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
   interestsContainer: {
     marginTop: 10,
     marginBottom: 10,
@@ -896,5 +1928,428 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 5,
     elevation: 6,
+  },
+  categorySelector: {
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEEEEE',
+    elevation: 2,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  categorySelectorContent: {
+    paddingHorizontal: 12,
+  },
+  categoryChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: '#F5F5F5',
+    marginHorizontal: 4,
+    borderWidth: 1,
+    borderColor: '#EEEEEE',
+  },
+  categoryChipActive: {
+    backgroundColor: '#22C55E',
+    borderColor: '#22C55E',
+  },
+  categoryChipText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#666666',
+  },
+  categoryChipTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  searchModalContainer: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  searchHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEEEEE',
+  },
+  searchBackButton: {
+    padding: 8,
+    marginRight: 8,
+  },
+  searchInputContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 44,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: '#333333',
+    height: '100%',
+  },
+  searchClearButton: {
+    padding: 6,
+  },
+  searchLoadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  searchEmptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  searchEmptyText: {
+    fontSize: 16,
+    color: '#666666',
+    textAlign: 'center',
+    marginTop: 16,
+  },
+  searchInitialContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    marginTop: 100,
+  },
+  searchInitialText: {
+    fontSize: 16,
+    color: '#999999',
+    textAlign: 'center',
+    marginTop: 16,
+    maxWidth: '80%',
+  },
+  searchResultsList: {
+    padding: 12,
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    marginBottom: 12,
+    padding: 12,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  searchResultImage: {
+    width: 80,
+    height: 80,
+    borderRadius: 8,
+  },
+  searchResultContent: {
+    flex: 1,
+    marginLeft: 12,
+    justifyContent: 'space-between',
+  },
+  searchResultName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333333',
+    marginBottom: 4,
+  },
+  searchResultDescription: {
+    fontSize: 14,
+    color: '#666666',
+    marginBottom: 8,
+    lineHeight: 18,
+  },
+  searchResultOwner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  searchResultOwnerName: {
+    fontSize: 12,
+    color: '#999999',
+    flex: 1,
+  },
+  searchResultCategory: {
+    backgroundColor: '#22C55E20',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  searchResultCategoryText: {
+    fontSize: 12,
+    color: '#22C55E',
+    fontWeight: '500',
+  },
+  listContainer: {
+    padding: 12,
+    paddingBottom: 20,
+  },
+  listItem: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    marginBottom: 16,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+    overflow: 'hidden',
+  },
+  listItemHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    paddingBottom: 8,
+  },
+  listItemAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 10,
+  },
+  listItemUserInfo: {
+    flex: 1,
+  },
+  listItemUsername: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333333',
+  },
+  listItemEmail: {
+    fontSize: 12,
+    color: '#999999',
+    marginBottom: 2,
+  },
+  listItemMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  listItemLocation: {
+    fontSize: 12,
+    color: '#666666',
+  },
+  listItemDot: {
+    fontSize: 12,
+    color: '#999999',
+    marginHorizontal: 4,
+  },
+  listItemTimestamp: {
+    fontSize: 12,
+    color: '#666666',
+  },
+  listItemMediaContainer: {
+    position: 'relative',
+    width: '100%',
+  },
+  listItemImage: {
+    width: '100%',
+    height: 240,
+    resizeMode: 'cover',
+  },
+  carouselContainer: {
+    width: '100%',
+    height: 240,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  carousel: {
+    width: SCREEN_WIDTH,
+    height: '100%',
+  },
+  carouselItem: {
+    width: SCREEN_WIDTH,
+    height: 240,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  carouselImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  carouselIndicators: {
+    position: 'absolute',
+    bottom: 16,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  carouselDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.5)',
+    marginHorizontal: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.1)',
+  },
+  carouselDotActive: {
+    backgroundColor: '#FFFFFF',
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 0, 0, 0.2)',
+  },
+  listItemCategoryBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    backgroundColor: 'rgba(34, 197, 94, 0.95)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  listItemCategoryIcon: {
+    marginRight: 4,
+  },
+  listItemCategoryText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+  },
+  listItemContent: {
+    padding: 12,
+  },
+  listItemName: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333333',
+    marginBottom: 6,
+  },
+  listItemDescription: {
+    fontSize: 14,
+    color: '#666666',
+    marginBottom: 12,
+    lineHeight: 20,
+  },
+  listItemActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F5F5F5',
+    paddingTop: 12,
+  },
+  listItemLikeButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#F5F5F5',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  listItemDetailsButton: {
+    backgroundColor: '#22C55E',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  listItemDetailsText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  listItemStats: {
+    flexDirection: 'row',
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F5F5F5',
+  },
+  listItemStat: {
+    marginRight: 16,
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
+  listItemStatValue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#333333',
+    marginRight: 4,
+  },
+  listItemStatLabel: {
+    fontSize: 12,
+    color: '#999999',
+    marginTop: 4,
+  },
+  starRating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadMoreIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  loadMoreText: {
+    fontSize: 14,
+    color: '#22C55E',
+    fontWeight: 'bold',
+    marginLeft: 8,
+  },
+  loadMoreHint: {
+    fontSize: 14,
+    color: '#999999',
+  },
+  loadMoreEnd: {
+    fontSize: 14,
+    color: '#999999',
+    fontStyle: 'italic',
+  },
+  listItemMediaOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'transparent',
+  },
+  ownerRatingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+    marginBottom: 2,
+  },
+  ownerTradesText: {
+    fontSize: 12,
+    color: '#999999',
+    marginLeft: 8,
+  },
+  ownerLocation: {
+    fontSize: 12,
+    color: '#666666',
   },
 });

@@ -25,30 +25,48 @@ export const chatService = {
   async createOrGetChatRoom(userId1: string, userId2: string): Promise<{ success: boolean; chatRoom?: ChatRoom; error?: string }> {
     try {
       // Check if chat room already exists
-      const { data: existingRoom } = await supabase
+      const { data: existingRoomData } = await supabase
         .from('chat_rooms')
-        .select(`
-          *,
-          participants:chat_room_participants(user:profiles(*))
-        `)
+        .select('*')
         .contains('participant_ids', [userId1, userId2])
         .single();
 
-      if (existingRoom) {
-        return { success: true, chatRoom: existingRoom as ChatRoom };
+      if (existingRoomData) {
+        // Fetch participants separately
+        const { data: participants } = await supabase
+          .from('profiles')
+          .select('*')
+          .in('id', [userId1, userId2]);
+          
+        // Construct the chat room with participants
+        const existingRoom: ChatRoom = {
+          ...existingRoomData,
+          participants: participants || [],
+        };
+        
+        return { success: true, chatRoom: existingRoom };
       }
 
-      // Create new chat room
-      const { data: newRoom, error: roomError } = await supabase
+      // Create new chat room without chaining select
+      const { error: roomError } = await supabase
         .from('chat_rooms')
         .insert({
           participant_ids: [userId1, userId2],
           created_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
+        });
 
       if (roomError) throw roomError;
+      
+      // Fetch the newly created room
+      const { data: newRoom, error: fetchError } = await supabase
+        .from('chat_rooms')
+        .select('*')
+        .contains('participant_ids', [userId1, userId2])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+        
+      if (fetchError) throw fetchError;
 
       // Add participants
       await supabase.from('chat_room_participants').insert([
@@ -56,16 +74,19 @@ export const chatService = {
         { chat_room_id: newRoom.id, user_id: userId2 },
       ]);
 
-      const { data: roomWithParticipants } = await supabase
-        .from('chat_rooms')
-        .select(`
-          *,
-          participants:chat_room_participants(user:profiles(*))
-        `)
-        .eq('id', newRoom.id)
-        .single();
+      // Fetch participants separately
+      const { data: participants } = await supabase
+        .from('profiles')
+        .select('*')
+        .in('id', [userId1, userId2]);
+        
+      // Construct the chat room with participants
+      const roomWithParticipants: ChatRoom = {
+        ...newRoom,
+        participants: participants || [],
+      };
 
-      return { success: true, chatRoom: roomWithParticipants as ChatRoom };
+      return { success: true, chatRoom: roomWithParticipants };
     } catch (error) {
       console.error('Error creating/getting chat room:', error);
       return { success: false, error: 'Failed to create or get chat room' };
@@ -80,10 +101,11 @@ export const chatService = {
     mediaUri?: string,
     messageType: 'text' | 'image' | 'video' | 'voice' | 'gif' | 'emoji' = 'text',
     duration?: number,
-    gifUrl?: string
+    gifUrl?: string,
+    metadata?: any
   ): Promise<{ success: boolean; message?: Message; error?: string }> {
     try {
-      // Create the message object
+      // First insert the message
       const messageData = {
         chat_room_id: chatRoomId,
         sender_id: senderId,
@@ -92,48 +114,46 @@ export const chatService = {
         message_type: messageType,
         duration,
         created_at: new Date().toISOString(),
-        gif_url: gifUrl,
       };
-
-      // First insert the message - using a more direct approach to avoid method chaining issues
-      const insertResult = await supabase
+      
+      // Insert the message without chaining select
+      const { error: insertError } = await supabase
         .from('messages')
         .insert(messageData);
+
+      if (insertError) throw insertError;
       
-      if (insertResult.error) {
-        throw insertResult.error;
-      }
-      
-      // Generate a unique identifier for this message to avoid query issues
-      const timestamp = new Date().toISOString();
-      
-      // Then fetch the inserted message with a separate query
-      // Use a more reliable approach that doesn't rely on content matching
-      const { data: messages, error: fetchError } = await supabase
+      // Fetch the inserted message in a separate query
+      const { data: fetchedMessage, error: fetchError } = await supabase
         .from('messages')
-        .select(`
-          *,
-          sender:profiles(*)
-        `)
+        .select('*')
         .eq('chat_room_id', chatRoomId)
         .eq('sender_id', senderId)
-        .eq('message_type', messageType)
-        .gte('created_at', new Date(Date.now() - 10000).toISOString()) // Messages from the last 10 seconds
         .order('created_at', { ascending: false })
-        .limit(1);
+        .limit(1)
+        .single();
+        
+      if (fetchError) throw fetchError;
 
-      if (fetchError) {
-        throw fetchError;
-      }
+      // Fetch the sender profile separately
+      const { data: senderProfile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', senderId)
+        .single();
+        
+      if (profileError) throw profileError;
       
-      if (!messages || messages.length === 0) {
-        throw new Error('Message was inserted but could not be retrieved');
-      }
+      // Combine the message and sender profile
+      const message: Message = {
+        ...fetchedMessage,
+        sender: senderProfile,
+      };
 
-      return { success: true, message: messages[0] as Message };
+      return { success: true, message };
     } catch (error) {
       console.error('Error sending message:', error);
-      return { success: false, error: 'Failed to send message' };
+      return { success: false, error: error instanceof Error ? error.message : 'Failed to send message' };
     }
   },
 
@@ -260,20 +280,34 @@ export const chatService = {
     error?: string 
   }> {
     try {
-      const { data: chatRoom, error } = await supabase
+      // Get the chat room basic details
+      const { data: chatRoomData, error } = await supabase
         .from('chat_rooms')
-        .select(`
-          *,
-          participants:chat_room_participants(user:profiles(*))
-        `)
+        .select('*')
         .eq('id', chatRoomId)
         .single();
 
       if (error) throw error;
+      
+      // Get the participant IDs from the chat room
+      const participantIds = chatRoomData.participant_ids || [];
+      
+      // Fetch participants separately
+      const { data: participants, error: participantsError } = await supabase
+        .from('profiles')
+        .select('*')
+        .in('id', participantIds);
+        
+      if (participantsError) throw participantsError;
+      
+      // Construct the chat room with participants
+      const chatRoom: ChatRoom = {
+        ...chatRoomData,
+        participants: participants || [],
+        unread_count: chatRoomData.unread_count || 0
+      };
 
-      const unreadCount = chatRoom.unread_count || 0;
-
-      return { success: true, chatRoom: chatRoom as ChatRoom };
+      return { success: true, chatRoom };
     } catch (error) {
       console.error('Error fetching chat room details:', error);
       return { success: false, error: 'Failed to fetch chat room details' };

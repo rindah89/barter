@@ -129,7 +129,7 @@ export default function TradesScreen() {
     // Add a polite closing
     tradeDetailsMessage += ". I would like to discuss this trade with you.";
     
-    // Navigate to chat screen with partner ID, initial message, and trade ID
+    // Navigate to chat screen with partner ID, initial message, and trade ID only
     router.push({
       pathname: '/chat',
       params: {
@@ -964,9 +964,57 @@ export default function TradesScreen() {
                       </View>
                     )}
                     {tradeDetails.trade?.status === 'accepted' && (
-                      <TouchableOpacity style={styles.modalMessageButton}>
+                      <TouchableOpacity 
+                        style={styles.modalMessageButton}
+                        onPress={() => {
+                          setDetailsVisible(false);
+                          // Determine the chat partner based on who the user is in the trade
+                          const isUserProposer = tradeDetails.trade?.proposer_id === user?.id;
+                          const partnerId = isUserProposer ? tradeDetails.trade?.receiver_id : tradeDetails.trade?.proposer_id;
+                          const partnerName = isUserProposer ? tradeDetails.receiver?.name : tradeDetails.proposer?.name;
+                          
+                          if (tradeDetails.trade) {
+                            // Create a formal message with trade details
+                            let tradeDetailsMessage = "Regarding our accepted trade: ";
+                            
+                            const userOfferedItem = isUserProposer ? tradeDetails.offeredItem : tradeDetails.requestedItem;
+                            const userRequestedItem = isUserProposer ? tradeDetails.requestedItem : tradeDetails.offeredItem;
+                            
+                            if (userOfferedItem?.name && userRequestedItem?.name) {
+                              tradeDetailsMessage += `I traded my ${userOfferedItem.name}`;
+                              
+                              // Add cash amount if it exists and the user is the one offering cash
+                              if (tradeDetails.trade.cash_amount && tradeDetails.trade.cash_amount > 0 && isUserProposer) {
+                                tradeDetailsMessage += ` with an additional ${tradeDetails.trade.cash_amount.toLocaleString()} FCFA`;
+                              }
+                              
+                              tradeDetailsMessage += ` for your ${userRequestedItem.name}`;
+                              
+                              // Add cash amount if it exists and the user is the one receiving cash
+                              if (tradeDetails.trade.cash_amount && tradeDetails.trade.cash_amount > 0 && !isUserProposer) {
+                                tradeDetailsMessage += ` with an additional ${tradeDetails.trade.cash_amount.toLocaleString()} FCFA from you`;
+                              }
+                            }
+                            
+                            tradeDetailsMessage += ". Let's coordinate the exchange.";
+                            
+                            // Navigate to chat screen with partner ID, initial message, and trade ID only
+                            router.push({
+                              pathname: '/chat',
+                              params: {
+                                partnerId,
+                                partnerName,
+                                initialMessage: tradeDetailsMessage,
+                                tradeId: tradeDetails.trade.id
+                              }
+                            });
+                          }
+                        }}
+                      >
                         <MessageCircle color="#FFFFFF" size={20} />
-                        <Text style={styles.modalMessageText}>Message {tradeDetails.proposer?.name}</Text>
+                        <Text style={styles.modalMessageText}>
+                          Message {tradeDetails.trade?.proposer_id === user?.id ? tradeDetails.receiver?.name : tradeDetails.proposer?.name}
+                        </Text>
                       </TouchableOpacity>
                     )}
                   </View>

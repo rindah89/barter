@@ -107,7 +107,12 @@ export default function ChatScreen() {
       
       // Then send it automatically after a short delay
       const timer = setTimeout(() => {
-        handleSendMessageWithTradeId(tradeId);
+        // Include the trade ID in the message content instead of as a separate field
+        const messageWithTradeId = initialMessage + ` (Trade ID: ${tradeId})`;
+        
+        // Use the regular handleSendMessage function
+        setMessageText(messageWithTradeId);
+        handleSendMessage();
       }, 500);
       
       return () => clearTimeout(timer);
@@ -254,88 +259,71 @@ export default function ChatScreen() {
     
     try {
       const tempId = `temp-${Date.now()}`;
-      const messageContent = messageText;
+      // Include the trade ID in the message content instead of as a separate field
+      const messageContent = messageText + ` (Trade ID: ${tradeId})`;
       
       // Add optimistic message at the beginning for inverted FlatList
       const tempMessage: Message = {
         id: tempId,
         room_id: chatRoomId,
+        chat_room_id: chatRoomId,
         sender_id: user?.id || '',
         content: messageContent,
         created_at: new Date().toISOString(),
         is_sending: true,
         is_error: false,
-        message_type: 'text',
-        metadata: { trade_id: tradeId }
+        message_type: 'text'
       };
       
       setMessages((prev) => [tempMessage, ...prev]);
       setMessageText('');
       
-      // Send message to server with trade ID in metadata
-      const messageData = {
-        chat_room_id: chatRoomId,
-        sender_id: user?.id || '',
-        content: messageContent,
-        message_type: 'text',
-        metadata: { trade_id: tradeId }
-      };
+      // Use the regular sendMessage function with the working approach
+      console.log(`Sending message with trade ID in content: ${tradeId}`);
+      const result = await chatService.sendMessage(
+        chatRoomId,
+        user?.id || '',
+        messageContent,
+        undefined,
+        'text'
+      );
       
-      // Insert the message directly - use two separate queries
-      const { error: insertError } = await supabase
-        .from('messages')
-        .insert(messageData);
-      
-      if (insertError) {
-        console.error('Error sending message with trade ID:', insertError);
+      if (!result.success) {
         // Update the temp message to show error
         setMessages((prev) =>
           prev.map((msg) =>
-            msg.id === tempId
-              ? { ...msg, is_sending: false, is_error: true }
-              : msg
+            msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
           )
         );
+        console.error('Failed to send message with trade ID:', result.error);
         Alert.alert('Error', 'Failed to send message. Please try again.');
+        return;
+      }
+      
+      if (result.message) {
+        // Replace temp message with actual message
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId ? { ...result.message, is_sending: false } : msg
+          )
+        );
       } else {
-        // Get the most recent message to update the UI
-        const { data: recentMessage, error: fetchError } = await supabase
-          .from('messages')
-          .select(`
-            *,
-            sender:profiles(*)
-          `)
-          .eq('chat_room_id', chatRoomId)
-          .eq('sender_id', user?.id || '')
-          .eq('content', messageContent)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .single();
-          
-        if (fetchError) {
-          console.error('Error fetching sent message:', fetchError);
-          // Just mark the message as sent without replacing it
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === tempId
-                ? { ...msg, is_sending: false }
-                : msg
-            )
-          );
-        } else if (recentMessage) {
-          // Update the temp message with the real message data
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === tempId
-                ? { ...recentMessage, is_sending: false, is_error: false }
-                : msg
-            )
-          );
-        }
+        // If no message returned, just mark as sent
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === tempId ? { ...msg, is_sending: false } : msg
+          )
+        );
       }
     } catch (error) {
       console.error('Error sending message with trade ID:', error);
-      setSending(false);
+      
+      // Update the temp message to show error
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
+        )
+      );
     } finally {
       setSending(false);
     }
@@ -355,18 +343,20 @@ export default function ChatScreen() {
       const tempMessage: Message = {
         id: tempId,
         room_id: chatRoomId,
+        chat_room_id: chatRoomId,
         sender_id: user?.id || '',
         content: messageContent,
         created_at: new Date().toISOString(),
         is_sending: true,
         is_error: false,
-        message_type: 'text',
+        message_type: 'text'
       };
       
       setMessages((prev) => [tempMessage, ...prev]);
       setMessageText('');
       
-      // Send message to server
+      // Send message to server using the working approach
+      console.log('Sending regular message');
       const result = await chatService.sendMessage(
         chatRoomId,
         user?.id || '',
@@ -517,11 +507,13 @@ export default function ChatScreen() {
 
       // Add optimistic message
       const tempId = `temp-${Date.now()}`;
-      const messageContent = `Voice message (${recordingDuration}s)`;
+      // Make content optional - can be null for voice messages without text
+      const messageContent = null;
       
       const tempMessage: Message = {
         id: tempId,
         chat_room_id: chatRoomId,
+        room_id: chatRoomId,
         sender_id: user.id,
         content: messageContent,
         created_at: new Date().toISOString(),
@@ -529,7 +521,7 @@ export default function ChatScreen() {
         is_error: false,
         message_type: 'voice',
         media_uri: recordingUri,
-        duration: recordingDuration,
+        duration: recordingDuration
       };
       
       setMessages((prev) => [tempMessage, ...prev]);
@@ -545,7 +537,7 @@ export default function ChatScreen() {
       
       console.log('Voice message uploaded successfully:', uploadResult.url);
 
-      // Send message
+      // Send message with the working approach
       const result = await chatService.sendMessage(
         chatRoomId,
         user.id,
@@ -590,13 +582,6 @@ export default function ChatScreen() {
     } catch (error) {
       console.error('Error sending voice message:', error);
       Alert.alert('Error', 'Failed to send voice message. Please try again.');
-      
-      // Update the temp message to show error
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
-        )
-      );
     } finally {
       setUploadingMedia(false);
     }
@@ -656,6 +641,11 @@ export default function ChatScreen() {
 
   // Render message item - updated to handle different media types
   const renderMessageItem = ({ item }: { item: Message }) => {
+    // Add null check for item
+    if (!item) {
+      return null;
+    }
+    
     const isMyMessage = item.sender_id === user?.id;
     
     return (
@@ -750,7 +740,7 @@ export default function ChatScreen() {
             </View>
           )}
           
-          {item.message_type === 'file' && (
+          {item.message_type === 'file' && item.media_uri && (
             <TouchableOpacity
               style={styles.fileContainer}
               onPress={() => {
@@ -778,12 +768,26 @@ export default function ChatScreen() {
               style={styles.gifImage}
               resizeMode={FastImage.resizeMode.contain}
             />
-          ) : item.message_type === 'text' && (
+          ) : item.message_type === 'text' && item.content ? (
             <Text
               style={[
                 styles.messageText,
                 isMyMessage ? styles.myMessageText : styles.partnerMessageText,
                 item.message_type === 'emoji' && styles.emojiText,
+              ]}
+            >
+              {item.content}
+            </Text>
+          ) : null}
+          
+          {/* Show text content for media messages if it exists */}
+          {(item.message_type === 'image' || item.message_type === 'video' || item.message_type === 'voice') && 
+           item.content && (
+            <Text
+              style={[
+                styles.messageText,
+                styles.mediaCaption,
+                isMyMessage ? styles.myMessageText : styles.partnerMessageText,
               ]}
             >
               {item.content}
@@ -919,17 +923,21 @@ export default function ChatScreen() {
         messageType = 'file';
       }
       
+      // Use null or empty content for media messages
+      const mediaContent = selectedMedia.name || null;
+      
       // Add optimistic message
       const tempMessage: Message = {
         id: tempId,
         room_id: chatRoomId,
+        chat_room_id: chatRoomId,
         sender_id: user?.id || '',
-        content: selectedMedia.name,
+        content: mediaContent,
         created_at: new Date().toISOString(),
         is_sending: true,
         is_error: false,
         message_type: messageType,
-        media_uri: selectedMedia.uri,
+        media_uri: selectedMedia.uri
       };
       
       setMessages((prev) => [tempMessage, ...prev]);
@@ -949,9 +957,9 @@ export default function ChatScreen() {
       const result = await chatService.sendMessage(
         chatRoomId,
         user.id,
-        selectedMedia.name,
+        mediaContent,
         uploadResult.url,
-        messageType
+        messageType as 'text' | 'image' | 'video' | 'voice' | 'gif' | 'emoji'
       );
       
       if (!result.success) {
@@ -1044,11 +1052,11 @@ export default function ChatScreen() {
             containerStyle={styles.loadingContainer}
             textStyle={styles.loadingText}
           />
-        ) : messages.length > 0 ? (
+        ) : messages && messages.length > 0 ? (
           <FlatList
             ref={flatListRef}
-            data={messages}
-            keyExtractor={(item) => item.id}
+            data={messages.filter(msg => msg !== null && msg !== undefined)}
+            keyExtractor={(item) => item?.id || `msg-${Date.now()}-${Math.random()}`}
             renderItem={renderMessageItem}
             contentContainerStyle={styles.messagesContainer}
             inverted={true}
@@ -1098,11 +1106,9 @@ export default function ChatScreen() {
                   sending && styles.sendButtonDisabled,
                 ]}
                 onPress={() => {
-                  if (tradeId) {
-                    handleSendMessageWithTradeId(tradeId);
-                  } else {
-                    handleSendMessage();
-                  }
+                  // Always use the regular handleSendMessage for user-typed messages
+                  // The initial message with tradeId is handled by the useEffect
+                  handleSendMessage();
                 }}
                 disabled={sending}
               >
@@ -1459,7 +1465,11 @@ const styles = StyleSheet.create({
     marginRight: 8,
     fontStyle: 'italic',
   },
-  // Media content styles
+  mediaCaption: {
+    fontSize: 14,
+    marginTop: 6,
+    marginBottom: 2,
+  },
   imageContent: {
     width: 200,
     height: 200,
@@ -1639,7 +1649,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontWeight: 'bold',
   },
-  // Voice message styles
   micButton: {
     width: 40,
     height: 40,

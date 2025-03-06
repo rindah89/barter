@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from './supabase';
-import { router } from 'expo-router';
+import { router, useRootNavigationState } from 'expo-router';
 import { ActivityIndicator, View, StyleSheet } from 'react-native';
 
 interface AuthContextType {
@@ -23,6 +23,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const rootNavigationState = useRootNavigationState();
 
   // Initialize the auth state on component mount
   useEffect(() => {
@@ -62,6 +64,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       subscription.unsubscribe();
     };
   }, []);
+
+  // Effect to handle navigation after sign out
+  useEffect(() => {
+    if (isSigningOut && !session && rootNavigationState?.key != null) {
+      // Router is ready and user is signed out, safe to navigate
+      try {
+        router.replace('/auth/login');
+        setIsSigningOut(false);
+      } catch (error) {
+        console.error('Navigation error during sign out:', error);
+        // If direct navigation fails, try a fallback
+        try {
+          router.replace('/splash');
+        } catch (fallbackError) {
+          console.error('Fallback navigation error:', fallbackError);
+        } finally {
+          setIsSigningOut(false);
+        }
+      }
+    }
+  }, [isSigningOut, session, rootNavigationState?.key]);
 
   // Sign in with email and password
   const signIn = async (email: string, password: string) => {
@@ -142,10 +165,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Sign out
   const signOut = async () => {
     try {
+      setIsSigningOut(true);
       await supabase.auth.signOut();
-      router.replace('/auth/login');
+      // Navigation will be handled by the effect above
     } catch (error) {
       console.error('Sign out error:', error);
+      setIsSigningOut(false);
     }
   };
 
