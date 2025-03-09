@@ -7,6 +7,7 @@ interface LoadingIndicatorProps {
   containerStyle?: ViewStyle;
   textStyle?: TextStyle;
   size?: 'small' | 'medium' | 'large';
+  color?: string;
 }
 
 /**
@@ -17,6 +18,7 @@ export default function LoadingIndicator({
   containerStyle,
   textStyle,
   size = 'medium',
+  color,
 }: LoadingIndicatorProps) {
   const lottieRef = useRef<LottieView>(null);
 

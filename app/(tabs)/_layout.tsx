@@ -15,7 +15,6 @@ export default function TabsLayout() {
   console.log('[TabsLayout] About to render AuthGuard');
   return (
     <AuthGuard>
-      {console.log('[TabsLayout] Inside AuthGuard children')}
       <Tabs
         screenOptions={{
           tabBarActiveTintColor: '#22C55E',

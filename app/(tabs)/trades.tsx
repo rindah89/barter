@@ -17,7 +17,6 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Check, X, MessageCircle, Info, Repeat, Edit2 } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
-import { Trade, Item, Profile } from '../../lib/supabase';
 import { useAuth } from '../../lib/AuthContext';
 import { getDefaultAvatar } from '../../lib/useDefaultAvatar';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -26,16 +25,22 @@ import { useRouter } from 'expo-router';
 import LoadingIndicator from '../../components/LoadingIndicator';
 import useProfile from '../../hooks/useProfile';
 import { useToast } from '../../lib/ToastContext';
+import { Tables } from '../../database.types';
+
+// Define types using the database schema
+type Trade = Tables<'trades'>;
+type Profile = Tables<'profiles'>;
+type Item = Tables<'items'>;
 
 // Define extended Trade type with additional properties used in the component
-interface ExtendedTrade extends Trade {
-  type?: 'sent' | 'received';
+interface ExtendedTrade extends Omit<Trade, 'cash_amount'> {
+  type?: 'sent' | 'received' | 'potential';
   date?: string;
   proposer?: Profile;
   receiver?: Profile;
   offered_item?: Item;
   requested_item?: Item;
-  cash_amount?: number | null;
+  cash_amount: number | null;
   isProposer?: boolean;
 }
 
@@ -395,7 +400,7 @@ export default function TradesScreen() {
     }
   };
 
-  const formatDate = (dateString: string | undefined) => {
+  const formatDate = (dateString: string | null | undefined) => {
     if (!dateString) return 'Unknown date';
     const date = new Date(dateString);
     return date.toLocaleDateString('en-US', {
@@ -542,7 +547,7 @@ export default function TradesScreen() {
                 },
               ]}
             >
-              {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+              {item.status ? item.status.charAt(0).toUpperCase() + item.status.slice(1) : 'Unknown'}
             </Text>
           )}
         </View>

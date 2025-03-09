@@ -13,6 +13,7 @@ import LoadingIndicator from '../components/LoadingIndicator';
 import { useLoading } from '../lib/LoadingContext';
 import LottieView from 'lottie-react-native';
 import { useToast } from '../lib/ToastContext';
+import { Tables } from '../database.types';
 
 // Get screen dimensions for responsive design
 const { width } = Dimensions.get('window');
@@ -34,16 +35,10 @@ interface ItemProfile {
   completed_trades?: number;
 }
 
-interface Item {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  image_url?: string;
-  media_type?: string;
-  media_files?: string | any[];
+// Use the database schema type
+type Item = Tables<'items'> & {
   profiles?: ItemProfile;
-}
+};
 
 export default function ItemDetailsScreen() {
   const { id } = useLocalSearchParams();

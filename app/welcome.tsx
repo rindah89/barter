@@ -236,20 +236,12 @@ export default function WelcomeScreen() {
           <TouchableOpacity 
             style={styles.scrollButton}
             onPress={() => {
-              scrollToContent();
+              router.push('/onboarding');
             }}
           >
             <ArrowRight color="#FFFFFF" size={24} />
           </TouchableOpacity>
         )}
-        
-        {/* Debug Button */}
-        <TouchableOpacity 
-          style={styles.debugButton}
-          onPress={() => router.push('/auth/debug')}
-        >
-          <Text style={styles.debugButtonText}>Debug</Text>
-        </TouchableOpacity>
       </View>
     </View>
   );
@@ -431,22 +423,5 @@ const styles = StyleSheet.create({
     padding: 16,
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
     borderRadius: 30,
-  },
-  debugButton: {
-    position: 'absolute',
-    bottom: 50,
-    right: 20,
-    zIndex: 1000,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
-    paddingVertical: 8,
-    paddingHorizontal: 15,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#FFFFFF',
-  },
-  debugButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: 'bold',
   },
 }); 

@@ -17,7 +17,7 @@ export default function AccountSecurityScreen() {
     rememberDevice: true,
   });
 
-  const toggleSwitch = (key) => {
+  const toggleSwitch = (key: keyof typeof securitySettings) => {
     setSecuritySettings(prev => ({
       ...prev,
       [key]: !prev[key]

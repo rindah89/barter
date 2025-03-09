@@ -19,7 +19,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Heart, X, Filter, LucidePackage, Info, Search, RotateCcw, User, ArrowLeft, Grid, Layers, Star } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
-import { Item } from '../../lib/supabase';
+import { Tables } from '../../database.types';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image as ExpoImage } from 'expo-image';
@@ -137,6 +137,9 @@ const MediaCarousel = ({ mediaFiles, mainImage }: { mediaFiles: string[], mainIm
     </View>
   );
 };
+
+// Define Item type using the database schema
+type Item = Tables<'items'>;
 
 export default function DiscoverScreen() {
   const [items, setItems] = useState<Item[]>([]);
@@ -1108,9 +1111,8 @@ export default function DiscoverScreen() {
   };
 
   // Format date
-  const formatDate = (dateString: string) => {
-    if (!dateString) return 'Recently';
-    
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return 'Unknown date';
     const date = new Date(dateString);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();

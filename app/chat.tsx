@@ -5,7 +5,6 @@ import {
   View,
   Text,
   FlatList,
-  Image,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -16,6 +15,8 @@ import {
   Modal,
   ScrollView,
 } from 'react-native';
+import { Image as RNImage } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Send, ChevronLeft, Paperclip, X, Mic, StopCircle, Play, Pause } from 'lucide-react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -25,7 +26,6 @@ import { format } from 'date-fns';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import LottieView from 'lottie-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import FastImage from 'react-native-fast-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Video, Audio } from 'expo-av';
@@ -656,7 +656,7 @@ export default function ChatScreen() {
         ]}
       >
         {!isMyMessage && partnerProfile && (
-          <Image
+          <RNImage
             source={{ 
               uri: partnerProfile.avatar_url || 'https://via.placeholder.com/40' 
             }}
@@ -680,10 +680,10 @@ export default function ChatScreen() {
                 Alert.alert('Image', 'Image preview functionality coming soon!');
               }}
             >
-              <FastImage
+              <Image
                 source={{ uri: item.media_uri }}
                 style={styles.imageContent}
-                resizeMode={FastImage.resizeMode.cover}
+                contentFit="cover"
               />
             </TouchableOpacity>
           )}
@@ -763,10 +763,10 @@ export default function ChatScreen() {
           )}
           
           {item.message_type === 'gif' && item.gif_url ? (
-            <FastImage
+            <Image
               source={{ uri: item.gif_url }}
               style={styles.gifImage}
-              resizeMode={FastImage.resizeMode.contain}
+              contentFit="contain"
             />
           ) : item.message_type === 'text' && item.content ? (
             <Text
@@ -1238,7 +1238,7 @@ export default function ChatScreen() {
               <Image
                 source={{ uri: selectedMedia.uri }}
                 style={styles.mediaPreviewImage}
-                resizeMode="contain"
+                contentFit="contain"
               />
             )}
             

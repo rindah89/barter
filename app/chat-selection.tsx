@@ -18,6 +18,23 @@ import { useRouter } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/AuthContext';
 import { chatService } from '../services/chatService';
+import { Tables } from '../database.types';
+
+// Define types
+type Profile = Tables<'profiles'>;
+type ChatRoom = {
+  id: string;
+  last_message?: {
+    content: string | null;
+    created_at: string;
+    sender_name: string;
+  };
+  other_participant: {
+    id: string;
+    name: string | null;
+    avatar_url: string | null;
+  };
+};
 
 // Dummy data for demonstration
 const recentChats = [
@@ -36,7 +53,7 @@ export default function ChatSelectionScreen() {
   const [loading, setLoading] = useState(false);
 
   // Function to search for users
-  const searchUsers = async (query) => {
+  const searchUsers = async (query: string) => {
     if (!query.trim()) {
       setSearchResults([]);
       setIsSearching(false);
@@ -83,7 +100,7 @@ export default function ChatSelectionScreen() {
   };
 
   // Handle search input changes
-  const handleSearchChange = (text) => {
+  const handleSearchChange = (text: string) => {
     setSearchQuery(text);
     if (text.trim().length > 2) {
       // Only search if at least 3 characters
@@ -102,7 +119,7 @@ export default function ChatSelectionScreen() {
   };
 
   // Navigate to individual chat
-  const navigateToChat = async (userId, userName, userAvatar) => {
+  const navigateToChat = async (userId: string, userName: string | null, userAvatar: string | null) => {
     try {
       if (!user) {
         Alert.alert('Error', 'You need to be logged in to chat');
@@ -146,7 +163,7 @@ export default function ChatSelectionScreen() {
   };
 
   // Function to render the last message preview
-  const renderLastMessagePreview = (chatRoom) => {
+  const renderLastMessagePreview = (chatRoom: ChatRoom) => {
     if (!chatRoom.last_message) {
       return <Text style={styles.lastMessage}>No messages yet</Text>;
     }
@@ -188,24 +205,23 @@ export default function ChatSelectionScreen() {
   };
 
   // Render recent chat item
-  const renderRecentChatItem = ({ item }) => (
+  const renderRecentChatItem = ({ item }: { item: ChatRoom }) => (
     <TouchableOpacity
       style={styles.chatItem}
-      onPress={() => navigateToChat(item.id, item.name, item.avatar)}
+      onPress={() => navigateToChat(item.id, item.other_participant.name, item.other_participant.avatar_url)}
     >
       <Image
-        source={{ uri: item.avatar }}
+        source={item.other_participant.avatar_url ? { uri: item.other_participant.avatar_url } : require('../assets/images/default-avatar.png')}
         style={styles.avatar}
-        defaultSource={require('../assets/images/default-avatar.png')}
       />
       <View style={styles.chatInfo}>
         <View style={styles.chatHeader}>
-          <Text style={styles.chatName}>{item.name}</Text>
+          <Text style={styles.chatName}>{item.other_participant.name}</Text>
           {renderLastMessagePreview(item)}
         </View>
         <View style={styles.chatFooter}>
-          <Text style={styles.timestamp}>{item.timestamp}</Text>
-          {item.unread > 0 && (
+          <Text style={styles.timestamp}>{item.last_message?.created_at}</Text>
+          {item.last_message?.sender_name !== user?.name && item.last_message?.sender_name !== null && item.unread > 0 && (
             <View style={styles.unreadBadge}>
               <Text style={styles.unreadText}>{item.unread}</Text>
             </View>
@@ -216,7 +232,7 @@ export default function ChatSelectionScreen() {
   );
 
   // Render search result item
-  const renderSearchResultItem = ({ item }) => (
+  const renderSearchResultItem = ({ item }: { item: Profile }) => (
     <TouchableOpacity
       style={styles.searchResultItem}
       onPress={() => navigateToChat(item.id, item.name, item.avatar_url)}

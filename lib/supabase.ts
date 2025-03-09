@@ -3,7 +3,16 @@ import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
 import { ExpoSecureStoreAdapter } from './ExpoSecureStoreAdapter';
-import { TradeStatus } from '../database.types';
+import { Tables } from '../database.types';
+
+// Define types using the database schema
+export type Profile = Tables<'profiles'>;
+export type Item = Tables<'items'>;
+export type Trade = Tables<'trades'>;
+export type Message = Tables<'messages'>;
+export type UserInterest = Tables<'user_interests'>;
+export type Review = Tables<'reviews'>;
+export type LikedItem = Tables<'liked_items'>;
 
 // Get Supabase URL and anon key from environment variables
 const supabaseUrl =
@@ -69,74 +78,3 @@ if (__DEV__) {
     }
   };
 }
-
-// Types for database tables
-export type Profile = {
-  id: string;
-  name: string;
-  email: string;
-  bio: string | null;
-  location: string | null;
-  avatar_url: string | null;
-  rating: number;
-  completed_trades: number;
-  created_at: string;
-  updated_at: string;
-};
-
-export type Item = {
-  id: string;
-  user_id: string;
-  name: string;
-  description: string | null;
-  category: string | null;
-  image_url: string | null;
-  media_type: string | null;
-  is_available: boolean;
-  created_at: string;
-  updated_at: string;
-};
-
-export type Trade = {
-  id: string;
-  proposer_id: string;
-  receiver_id: string;
-  offered_item_id: string;
-  requested_item_id: string;
-  status: TradeStatus;
-  cash_amount: number | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type Message = {
-  id: string;
-  trade_id: string;
-  sender_id: string;
-  content: string;
-  created_at: string;
-};
-
-export type UserInterest = {
-  id: string;
-  user_id: string;
-  interest: string;
-  created_at: string;
-};
-
-export type Review = {
-  id: string;
-  trade_id: string;
-  reviewer_id: string;
-  reviewed_id: string;
-  rating: number;
-  comment: string | null;
-  created_at: string;
-};
-
-export type LikedItem = {
-  id: string;
-  user_id: string;
-  item_id: string;
-  created_at: string;
-};
