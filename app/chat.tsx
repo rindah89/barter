@@ -28,12 +28,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import FastImage from 'react-native-fast-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import { Video, Audio } from 'expo-av';
+import { Video } from 'expo-av';
 import MediaSourceModal from '@/components/MediaSourceModal';
 import { uploadFile } from '@/services/imageservice';
 import LoadingIndicator from '../components/LoadingIndicator';
 import { supabase } from '@/lib/supabase';
 import * as FileSystem from 'expo-file-system';
+import { presenceService } from '@/services/presenceService';
 
 export default function ChatScreen() {
   const insets = useSafeAreaInsets();
@@ -43,13 +44,17 @@ export default function ChatScreen() {
   
   const [messageText, setMessageText] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
+  const [messageMap, setMessageMap] = useState<{[key: string]: boolean}>({});
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [chatRoomId, setChatRoomId] = useState<string | null>(null);
   const [partnerProfile, setPartnerProfile] = useState<any>(null);
+  const [partnerOnline, setPartnerOnline] = useState<boolean>(false);
+  const [partnerLastSeen, setPartnerLastSeen] = useState<string | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const lottieRef = useRef<LottieView>(null);
   const subscriptionRef = useRef<any>(null);
+  const presenceSubscriptionRef = useRef<any>(null);
   
   // Media handling state
   const [showMediaModal, setShowMediaModal] = useState(false);
@@ -67,8 +72,8 @@ export default function ChatScreen() {
   const [playbackPosition, setPlaybackPosition] = useState<{[key: string]: number}>({});
 
   // Refs for recording and playback
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  const soundPlayersRef = useRef<{[key: string]: Audio.Sound}>({});
+  const recordingRef = useRef(null);
+  const soundPlayersRef = useRef({});
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   // Get partner ID from params
@@ -77,6 +82,10 @@ export default function ChatScreen() {
   const userAvatar = params.userAvatar as string;
   const initialMessage = params.initialMessage as string;
   const tradeId = params.tradeId as string;
+  const offeredItemImageUrl = params.offeredItemImageUrl as string;
+  const requestedItemImageUrl = params.requestedItemImageUrl as string;
+  const offeredItemName = params.offeredItemName as string;
+  const requestedItemName = params.requestedItemName as string;
   
   // Track if initial message has been sent
   const [initialMessageSent, setInitialMessageSent] = useState(false);
@@ -106,18 +115,25 @@ export default function ChatScreen() {
       setMessageText(initialMessage);
       
       // Then send it automatically after a short delay
-      const timer = setTimeout(() => {
-        // Include the trade ID in the message content instead of as a separate field
-        const messageWithTradeId = initialMessage + ` (Trade ID: ${tradeId})`;
+      const timer = setTimeout(async () => {
+        // Send the initial message without appending the trade ID to the visible text
+        // The trade ID will be included in metadata or as a separate field
+        setMessageText(initialMessage);
+        await handleSendMessageWithTradeId(tradeId);
         
-        // Use the regular handleSendMessage function
-        setMessageText(messageWithTradeId);
-        handleSendMessage();
+        // Then send the item images if available
+        if (offeredItemImageUrl) {
+          await sendTradeItemImage(offeredItemImageUrl, `My offered item: ${offeredItemName || 'Item'}`);
+        }
+        
+        if (requestedItemImageUrl) {
+          await sendTradeItemImage(requestedItemImageUrl, `Your item: ${requestedItemName || 'Item'}`);
+        }
       }, 500);
       
       return () => clearTimeout(timer);
     }
-  }, [initialMessage, chatRoomId, tradeId]);
+  }, [initialMessage, chatRoomId, tradeId, offeredItemImageUrl, requestedItemImageUrl]);
 
   // Initialize chat room
   useEffect(() => {
@@ -162,6 +178,18 @@ export default function ChatScreen() {
           
           // Set up real-time subscription
           setupSubscription(result.chatRoom.id);
+          
+          // Update current user's presence
+          await presenceService.updatePresence(user.id);
+          
+          // Check partner's online status
+          const presenceResult = await presenceService.isUserOnline(partnerId);
+          if (presenceResult.success) {
+            setPartnerOnline(presenceResult.isOnline);
+          }
+          
+          // Subscribe to partner's presence changes
+          setupPresenceSubscription(partnerId);
         }
       } catch (error) {
         console.error('Error initializing chat:', error);
@@ -173,11 +201,48 @@ export default function ChatScreen() {
 
     initializeChat();
     
+    // Set up a periodic presence update for the current user
+    const presenceInterval = setInterval(() => {
+      if (user?.id) {
+        presenceService.updatePresence(user.id).catch(err => {
+          console.error('Error updating presence:', err);
+        });
+      }
+    }, 30000); // Update every 30 seconds
+    
     return () => {
       clearTimeout(timeoutId);
-      // Clean up subscription on unmount
+      clearInterval(presenceInterval);
+      
+      // Mark user as offline when leaving
+      if (user?.id) {
+        presenceService.markOffline(user.id).catch(err => {
+          console.error('Error marking user offline:', err);
+        });
+      }
+      
+      // Clean up subscriptions on unmount - Fix the cleanup
       if (subscriptionRef.current) {
-        subscriptionRef.current.then(sub => sub.unsubscribe());
+        // Check if it's a Promise or direct subscription
+        if (typeof subscriptionRef.current.then === 'function') {
+          // Handle Promise without await since we're in a non-async function
+          subscriptionRef.current.then(sub => {
+            if (sub && typeof sub.unsubscribe === 'function') {
+              sub.unsubscribe();
+            }
+          }).catch(err => {
+            console.error('Error unsubscribing from messages:', err);
+          });
+        } else if (subscriptionRef.current.unsubscribe) {
+          subscriptionRef.current.unsubscribe();
+        }
+      }
+      
+      if (presenceSubscriptionRef.current) {
+        // Fix: Don't use .then() as it's not a Promise
+        if (presenceSubscriptionRef.current.unsubscribe) {
+          presenceSubscriptionRef.current.unsubscribe();
+        }
       }
     };
   }, [user, partnerId, userName, userAvatar]);
@@ -187,8 +252,13 @@ export default function ChatScreen() {
     try {
       // Clean up any existing subscription
       if (subscriptionRef.current) {
-        const sub = await subscriptionRef.current;
-        sub.unsubscribe();
+        // Check if it's a Promise or direct subscription
+        if (typeof subscriptionRef.current.then === 'function') {
+          const sub = await subscriptionRef.current;
+          sub.unsubscribe();
+        } else if (subscriptionRef.current.unsubscribe) {
+          subscriptionRef.current.unsubscribe();
+        }
       }
       
       // Create new subscription
@@ -199,24 +269,74 @@ export default function ChatScreen() {
         if (payload.eventType === 'INSERT') {
           const newMessage = payload.new;
           
-          // Check if this message is already in our state (to avoid duplicates)
-          const messageExists = messages.some(msg => msg.id === newMessage.id);
-          if (messageExists) {
-            console.log('Message already exists in state, skipping');
-            return;
-          }
+          // Log the message ID to help with debugging
+          console.log('Received message with ID:', newMessage.id);
           
-          // Add the new message to the beginning of the array for inverted FlatList
-          setMessages(prevMessages => [
-            newMessage,
-            ...prevMessages
-          ]);
-          
-          // No need to scroll with inverted FlatList
+          setMessages(prevMessages => {
+            // First check if this exact message ID already exists in our state
+            const exactDuplicate = prevMessages.some(msg => msg.id === newMessage.id);
+            if (exactDuplicate) {
+              console.log('Exact duplicate message found, skipping:', newMessage.id);
+              return prevMessages;
+            }
+            
+            // Check if we have a temporary message that needs to be replaced
+            const tempMessageIndex = prevMessages.findIndex(msg => 
+              msg.is_sending && msg.content === newMessage.content && 
+              msg.sender_id === newMessage.sender_id &&
+              Math.abs(new Date(msg.created_at).getTime() - new Date(newMessage.created_at).getTime()) < 10000
+            );
+
+            if (tempMessageIndex !== -1) {
+              // Replace the temporary message with the real one
+              console.log('Replacing temp message with real message:', newMessage.id);
+              const updatedMessages = [...prevMessages];
+              updatedMessages[tempMessageIndex] = { ...newMessage, is_sending: false };
+              return updatedMessages;
+            }
+
+            // If no temporary message found and not in messageMap, add as new
+            if (!messageMap[newMessage.id]) {
+              console.log('Adding new message to state:', newMessage.id);
+              setMessageMap(prev => ({ ...prev, [newMessage.id]: true }));
+              return [newMessage, ...prevMessages];
+            }
+
+            return prevMessages;
+          });
         }
       });
     } catch (error) {
       console.error('Error setting up subscription:', error);
+    }
+  };
+
+  // Set up presence subscription
+  const setupPresenceSubscription = async (partnerId) => {
+    try {
+      // Clean up any existing subscription
+      if (presenceSubscriptionRef.current) {
+        // Fix: Don't use .then() as it's not a Promise
+        presenceSubscriptionRef.current.unsubscribe();
+      }
+      
+      // Create new subscription
+      presenceSubscriptionRef.current = presenceService.subscribeToUserPresence(partnerId, (payload) => {
+        console.log('Received presence update:', payload);
+        
+        if (payload.eventType === 'UPDATE') {
+          const presenceData = payload.new;
+          
+          // Check if user is online (is_online flag and last_seen within 2 minutes)
+          const isOnline = presenceData.is_online && 
+            new Date(presenceData.last_seen).getTime() > Date.now() - 2 * 60 * 1000;
+          
+          setPartnerOnline(isOnline);
+          setPartnerLastSeen(presenceData.last_seen);
+        }
+      });
+    } catch (error) {
+      console.error('Error setting up presence subscription:', error);
     }
   };
 
@@ -239,13 +359,33 @@ export default function ChatScreen() {
       }
       
       console.log('Setting messages:', result.messages.length);
+      
+      // Deduplicate messages by ID before sorting
+      const uniqueMessages = result.messages.reduce((acc, message) => {
+        // Only add if we don't already have this message ID
+        if (!acc.some(m => m.id === message.id)) {
+          acc.push(message);
+        } else {
+          console.log('Duplicate message found during load:', message.id);
+        }
+        return acc;
+      }, []);
+      
+      console.log('Unique messages count:', uniqueMessages.length);
+      
       // Sort messages in reverse chronological order for inverted FlatList
-      const sortedMessages = [...result.messages].sort((a, b) => 
+      const sortedMessages = [...uniqueMessages].sort((a, b) => 
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
-      setMessages(sortedMessages);
       
-      // No need to scroll with inverted FlatList
+      // Create a map of message IDs
+      const newMessageMap = sortedMessages.reduce((acc, msg) => {
+        acc[msg.id] = true;
+        return acc;
+      }, {} as {[key: string]: boolean});
+      
+      setMessageMap(newMessageMap);
+      setMessages(sortedMessages);
     } catch (error) {
       console.error('Error loading messages:', error);
     }
@@ -259,8 +399,14 @@ export default function ChatScreen() {
     
     try {
       const tempId = `temp-${Date.now()}`;
-      // Include the trade ID in the message content instead of as a separate field
-      const messageContent = messageText + ` (Trade ID: ${tradeId})`;
+      // Use the message text as is, without appending the trade ID
+      const messageContent = messageText;
+      
+      // Create metadata to store the trade ID
+      const metadata = {
+        tradeId: tradeId,
+        isTradeMessage: true
+      };
       
       // Add optimistic message at the beginning for inverted FlatList
       const tempMessage: Message = {
@@ -272,20 +418,24 @@ export default function ChatScreen() {
         created_at: new Date().toISOString(),
         is_sending: true,
         is_error: false,
-        message_type: 'text'
+        message_type: 'text',
+        metadata: metadata
       };
       
       setMessages((prev) => [tempMessage, ...prev]);
       setMessageText('');
       
-      // Use the regular sendMessage function with the working approach
-      console.log(`Sending message with trade ID in content: ${tradeId}`);
+      // Use the regular sendMessage function with metadata for the trade ID
+      console.log(`Sending message with trade ID in metadata: ${tradeId}`);
       const result = await chatService.sendMessage(
         chatRoomId,
         user?.id || '',
         messageContent,
         undefined,
-        'text'
+        'text',
+        undefined,
+        undefined,
+        metadata
       );
       
       if (!result.success) {
@@ -317,13 +467,7 @@ export default function ChatScreen() {
       }
     } catch (error) {
       console.error('Error sending message with trade ID:', error);
-      
-      // Update the temp message to show error
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
-        )
-      );
+      Alert.alert('Error', 'Failed to send message. Please try again.');
     } finally {
       setSending(false);
     }
@@ -338,25 +482,28 @@ export default function ChatScreen() {
     try {
       const tempId = `temp-${Date.now()}`;
       const messageContent = messageText;
+      const currentTime = new Date().toISOString();
       
-      // Add optimistic message at the beginning for inverted FlatList
+      // Add optimistic message
       const tempMessage: Message = {
         id: tempId,
         room_id: chatRoomId,
         chat_room_id: chatRoomId,
         sender_id: user?.id || '',
         content: messageContent,
-        created_at: new Date().toISOString(),
+        created_at: currentTime,
         is_sending: true,
         is_error: false,
-        message_type: 'text'
+        message_type: 'text',
+        sender: user
       };
       
-      setMessages((prev) => [tempMessage, ...prev]);
+      // Add to messageMap to prevent duplication
+      setMessageMap(prev => ({ ...prev, [tempId]: true }));
+      setMessages(prev => [tempMessage, ...prev]);
       setMessageText('');
       
-      // Send message to server using the working approach
-      console.log('Sending regular message');
+      // Send message to server
       const result = await chatService.sendMessage(
         chatRoomId,
         user?.id || '',
@@ -367,8 +514,8 @@ export default function ChatScreen() {
       
       if (!result.success) {
         // Update the temp message to show error
-        setMessages((prev) =>
-          prev.map((msg) =>
+        setMessages(prev =>
+          prev.map(msg =>
             msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
           )
         );
@@ -376,27 +523,13 @@ export default function ChatScreen() {
         return;
       }
       
-      if (result.message) {
-        // Replace temp message with actual message
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...result.message, is_sending: false } : msg
-          )
-        );
-      } else {
-        // If no message returned, just mark as sent
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...msg, is_sending: false } : msg
-          )
-        );
-      }
+      // The real message will be handled by the subscription
     } catch (error) {
       console.error('Error sending message:', error);
       
       // Update the temp message to show error
-      setMessages((prev) =>
-        prev.map((msg) =>
+      setMessages(prev =>
+        prev.map(msg =>
           msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
         )
       );
@@ -411,238 +544,75 @@ export default function ChatScreen() {
     return format(new Date(timestamp), 'h:mm a');
   };
 
-  // Initialize audio
-  useEffect(() => {
-    const setupAudio = async () => {
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: false,
-          shouldDuckAndroid: true,
-        });
-      } catch (error) {
-        console.error('Error setting up audio:', error);
-      }
-    };
-
-    setupAudio();
+  // Format last seen time
+  const formatLastSeen = (timestamp: string | null) => {
+    if (!timestamp) return '';
     
-    // Clean up audio resources
+    const lastSeenDate = new Date(timestamp);
+    const now = new Date();
+    const diffMinutes = Math.floor((now.getTime() - lastSeenDate.getTime()) / (1000 * 60));
+    
+    if (diffMinutes < 1) {
+      return 'Just now';
+    } else if (diffMinutes < 60) {
+      return `${diffMinutes} ${diffMinutes === 1 ? 'minute' : 'minutes'} ago`;
+    } else if (diffMinutes < 24 * 60) {
+      const hours = Math.floor(diffMinutes / 60);
+      return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+    } else {
+      return format(lastSeenDate, 'MMM d, h:mm a');
+    }
+  };
+
+  // Replace audio setup with empty function
+  useEffect(() => {
+    // Audio functionality has been removed
+    console.log('Audio functionality has been disabled');
+    
     return () => {
-      // Stop and unload recording if exists
-      if (recordingRef.current) {
-        recordingRef.current.stopAndUnloadAsync().catch(console.error);
-      }
-      
-      // Stop and unload all sound players
-      Object.values(soundPlayersRef.current).forEach(player => {
-        player.unloadAsync().catch(console.error);
-      });
-      
-      // Clear intervals
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current);
-      }
+      // No cleanup needed
     };
   }, []);
 
-  // Start recording function
+  // Replace recording function with placeholder
   const startRecording = async () => {
-    try {
-      // Request permissions
-      const permission = await Audio.requestPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert('Permission required', 'Please grant microphone access to record voice messages.');
-        return;
-      }
-
-      // Create recording object
-      const newRecording = new Audio.Recording();
-      recordingRef.current = newRecording;
-
-      // Start recording
-      await newRecording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      await newRecording.startAsync();
-      setIsRecording(true);
-      setRecordingDuration(0);
-
-      // Start duration timer
-      recordingIntervalRef.current = setInterval(() => {
-        setRecordingDuration(prev => prev + 1);
-      }, 1000);
-    } catch (error) {
-      console.error('Error starting recording:', error);
-      Alert.alert('Error', 'Failed to start recording. Please try again.');
-    }
+    Alert.alert(
+      'Feature Disabled',
+      'Voice recording has been temporarily disabled.',
+      [{ text: 'OK' }]
+    );
   };
 
-  // Stop recording function
+  // Replace stop recording function with placeholder
   const stopRecording = async () => {
-    try {
-      if (!recordingRef.current) return;
-
-      // Stop the recording
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
-      setRecordingUri(uri);
-
-      // Clear interval and reset states
-      if (recordingIntervalRef.current) {
-        clearInterval(recordingIntervalRef.current);
-      }
-      setIsRecording(false);
-    } catch (error) {
-      console.error('Error stopping recording:', error);
-      Alert.alert('Error', 'Failed to stop recording. Please try again.');
-    }
+    setIsRecording(false);
   };
 
-  // Send voice message function
+  // Replace send voice message function with placeholder
   const sendVoiceMessage = async () => {
-    if (!recordingUri || !chatRoomId || !user?.id) return;
-
-    try {
-      setUploadingMedia(true);
-
-      // Add optimistic message
-      const tempId = `temp-${Date.now()}`;
-      // Make content optional - can be null for voice messages without text
-      const messageContent = null;
-      
-      const tempMessage: Message = {
-        id: tempId,
-        chat_room_id: chatRoomId,
-        room_id: chatRoomId,
-        sender_id: user.id,
-        content: messageContent,
-        created_at: new Date().toISOString(),
-        is_sending: true,
-        is_error: false,
-        message_type: 'voice',
-        media_uri: recordingUri,
-        duration: recordingDuration
-      };
-      
-      setMessages((prev) => [tempMessage, ...prev]);
-
-      // Upload voice message
-      console.log('Uploading voice message:', recordingUri);
-      const uploadResult = await chatService.uploadVoiceMessage(recordingUri);
-      
-      if (!uploadResult.success || !uploadResult.url) {
-        console.error('Failed to upload voice message:', uploadResult.error);
-        throw new Error('Failed to upload voice message');
-      }
-      
-      console.log('Voice message uploaded successfully:', uploadResult.url);
-
-      // Send message with the working approach
-      const result = await chatService.sendMessage(
-        chatRoomId,
-        user.id,
-        messageContent,
-        uploadResult.url,
-        'voice',
-        recordingDuration
-      );
-      
-      if (!result.success) {
-        console.error('Failed to send voice message:', result.error);
-        // Update the temp message to show error
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
-          )
-        );
-        throw new Error(result.error || 'Failed to send voice message');
-      }
-      
-      console.log('Voice message sent successfully:', result.message);
-      
-      if (result.message) {
-        // Replace temp message with actual message
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...result.message, is_sending: false } : msg
-          )
-        );
-      } else {
-        // If no message returned, just mark as sent
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...msg, is_sending: false } : msg
-          )
-        );
-      }
-
-      // Clear recording states
-      setRecordingUri(null);
-      setRecordingDuration(0);
-    } catch (error) {
-      console.error('Error sending voice message:', error);
-      Alert.alert('Error', 'Failed to send voice message. Please try again.');
-    } finally {
-      setUploadingMedia(false);
-    }
+    Alert.alert(
+      'Feature Disabled',
+      'Voice messages have been temporarily disabled.',
+      [{ text: 'OK' }]
+    );
+    setIsRecording(false);
+    setRecordingUri(null);
   };
 
-  // Play/pause voice message function
+  // Replace voice message playback function with placeholder
   const togglePlayVoiceMessage = async (messageId: string, uri: string) => {
-    try {
-      // If already playing, stop it
-      if (soundPlayersRef.current[messageId]) {
-        const player = soundPlayersRef.current[messageId];
-        const status = await player.getStatusAsync();
-        
-        if (status.isLoaded) {
-          if (status.isPlaying) {
-            await player.pauseAsync();
-            setIsPlaying(prev => ({ ...prev, [messageId]: false }));
-          } else {
-            await player.playAsync();
-            setIsPlaying(prev => ({ ...prev, [messageId]: true }));
-          }
-        }
-        return;
-      }
-
-      // Create new sound player
-      const sound = new Audio.Sound();
-      await sound.loadAsync({ uri });
-      soundPlayersRef.current[messageId] = sound;
-
-      // Get duration
-      const status = await sound.getStatusAsync();
-      if (status.isLoaded) {
-        setPlaybackDuration(prev => ({ ...prev, [messageId]: status.durationMillis || 0 }));
-      }
-
-      // Play and update state
-      await sound.playAsync();
-      setIsPlaying(prev => ({ ...prev, [messageId]: true }));
-
-      // Add playback finished listener
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded) {
-          setPlaybackPosition(prev => ({ ...prev, [messageId]: status.positionMillis }));
-          
-          if (status.didJustFinish) {
-            setIsPlaying(prev => ({ ...prev, [messageId]: false }));
-            setPlaybackPosition(prev => ({ ...prev, [messageId]: 0 }));
-          }
-        }
-      });
-    } catch (error) {
-      console.error('Error playing voice message:', error);
-      Alert.alert('Error', 'Failed to play voice message. Please try again.');
-    }
+    Alert.alert(
+      'Feature Disabled',
+      'Voice message playback has been temporarily disabled.',
+      [{ text: 'OK' }]
+    );
   };
 
   // Render message item - updated to handle different media types
   const renderMessageItem = ({ item }: { item: Message }) => {
-    // Add null check for item
-    if (!item) {
+    // Add null check for item and required properties
+    if (!item || !item.id || !item.sender_id) {
+      console.log('Invalid message item:', item);
       return null;
     }
     
@@ -650,6 +620,7 @@ export default function ChatScreen() {
     
     return (
       <View
+        key={`msg-${item.id}`}
         style={[
           styles.messageWrapper,
           isMyMessage ? styles.myMessageWrapper : styles.partnerMessageWrapper,
@@ -674,18 +645,31 @@ export default function ChatScreen() {
         >
           {/* Render different types of media */}
           {item.message_type === 'image' && item.media_uri && (
-            <TouchableOpacity
-              onPress={() => {
-                // Handle image preview (could implement a full-screen preview)
-                Alert.alert('Image', 'Image preview functionality coming soon!');
-              }}
-            >
-              <FastImage
-                source={{ uri: item.media_uri }}
-                style={styles.imageContent}
-                resizeMode={FastImage.resizeMode.cover}
-              />
-            </TouchableOpacity>
+            <View style={styles.imageWrapper}>
+              <TouchableOpacity
+                onPress={() => {
+                  // Handle image preview (could implement a full-screen preview)
+                  Alert.alert('Image', 'Image preview functionality coming soon!');
+                }}
+              >
+                {/* Use try-catch with error state to handle image loading errors */}
+                <View style={styles.imageContent}>
+                  <FastImage
+                    source={{ uri: item.media_uri }}
+                    style={styles.imageInner}
+                    resizeMode={FastImage.resizeMode.cover}
+                    onError={() => {
+                      console.log('Error loading image:', item.media_uri);
+                    }}
+                    fallback={
+                      <View style={styles.imageFallback}>
+                        <Text style={styles.imageFallbackText}>Image unavailable</Text>
+                      </View>
+                    }
+                  />
+                </View>
+              </TouchableOpacity>
+            </View>
           )}
           
           {item.message_type === 'video' && item.media_uri && (
@@ -782,7 +766,7 @@ export default function ChatScreen() {
           
           {/* Show text content for media messages if it exists */}
           {(item.message_type === 'image' || item.message_type === 'video' || item.message_type === 'voice') && 
-           item.content && (
+           item.content && item.content.trim() !== '' && (
             <Text
               style={[
                 styles.messageText,
@@ -908,6 +892,11 @@ export default function ChatScreen() {
       return;
     }
     
+    // Prevent multiple submissions
+    if (uploadingMedia) {
+      return;
+    }
+    
     setUploadingMedia(true);
     
     try {
@@ -923,8 +912,30 @@ export default function ChatScreen() {
         messageType = 'file';
       }
       
-      // Use null or empty content for media messages
-      const mediaContent = selectedMedia.name || null;
+      // Use messageText as caption if provided, otherwise use a descriptive text based on media type
+      let mediaContent = messageText.trim();
+      if (!mediaContent) {
+        if (messageType === 'image') {
+          mediaContent = '📷 Image';
+        } else if (messageType === 'video') {
+          mediaContent = '🎥 Video';
+        } else {
+          mediaContent = '📎 File';
+        }
+      }
+      
+      // Create a safe sender object with only necessary properties
+      const safeSender = {
+        id: user.id,
+        username: user.username,
+        full_name: user.full_name,
+        avatar_url: user.avatar_url
+      };
+      
+      // Validate the media URI before proceeding
+      if (!selectedMedia.uri || typeof selectedMedia.uri !== 'string') {
+        throw new Error('Invalid media URI');
+      }
       
       // Add optimistic message
       const tempMessage: Message = {
@@ -937,67 +948,130 @@ export default function ChatScreen() {
         is_sending: true,
         is_error: false,
         message_type: messageType,
-        media_uri: selectedMedia.uri
+        media_uri: selectedMedia.uri,
+        sender: safeSender
       };
       
-      setMessages((prev) => [tempMessage, ...prev]);
+      // Add to messageMap to prevent duplication
+      setMessageMap(prev => ({ ...prev, [tempId]: true }));
+      
+      // Update messages state safely
+      setMessages(prevMessages => {
+        return [tempMessage, ...prevMessages];
+      });
+      
+      // Clear the input field
+      setMessageText('');
+      
+      // Close the media preview first to avoid UI issues
+      setMediaPreviewVisible(false);
       
       // Upload media to storage
       let folderName = 'chatFiles';
       if (messageType === 'image') folderName = 'chatImages';
       if (messageType === 'video') folderName = 'chatVideos';
       
+      console.log('Uploading media:', selectedMedia.uri);
       const uploadResult = await chatService.uploadChatMedia(selectedMedia, chatRoomId);
       
       if (!uploadResult.success || !uploadResult.url) {
         throw new Error('Failed to upload media');
       }
       
+      console.log('Media uploaded successfully:', uploadResult.url);
+      
       // Send message with media URL
       const result = await chatService.sendMessage(
         chatRoomId,
         user.id,
-        mediaContent,
+        mediaContent, // Use the caption if provided, otherwise null
         uploadResult.url,
         messageType as 'text' | 'image' | 'video' | 'voice' | 'gif' | 'emoji'
       );
       
-      if (!result.success) {
-        // Update the temp message to show error
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
-          )
-        );
-        console.error('Failed to send media message:', result.error);
-        return;
-      }
+      // The real message will be handled by the subscription
       
-      // Replace temp message with actual message
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === tempId ? { ...result.message, is_sending: false } : msg
-        )
-      );
-      
-      // Clear selected media
+      // Clear selected media after successful upload
       setSelectedMedia(null);
-      setMediaPreviewVisible(false);
     } catch (error) {
-      console.error('Error sending media message:', error);
+      console.error('Error sending media:', error);
       
       // Update the temp message to show error
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id.startsWith('temp-') && msg.is_sending
-            ? { ...msg, is_sending: false, is_error: true }
-            : msg
-        )
-      );
+      if (tempId) {
+        setMessages(prevMessages => {
+          return prevMessages.map(msg => {
+            if (msg.id === tempId) {
+              return { ...msg, is_sending: false, is_error: true };
+            }
+            return msg;
+          });
+        });
+      }
       
       Alert.alert('Error', 'Failed to send media. Please try again.');
     } finally {
       setUploadingMedia(false);
+    }
+  };
+
+  // Function to send trade item images
+  const sendTradeItemImage = async (imageUrl: string, caption: string) => {
+    if (!imageUrl || !chatRoomId || !user) return;
+    
+    try {
+      const tempId = `temp-${Date.now()}`;
+      
+      // Create a safe sender object with only necessary properties
+      const safeSender = {
+        id: user.id,
+        username: user.username,
+        full_name: user.full_name,
+        avatar_url: user.avatar_url
+      };
+      
+      // Add optimistic message
+      const tempMessage: Message = {
+        id: tempId,
+        room_id: chatRoomId,
+        chat_room_id: chatRoomId,
+        sender_id: user?.id || '',
+        content: caption,
+        created_at: new Date().toISOString(),
+        is_sending: true,
+        is_error: false,
+        message_type: 'image',
+        media_uri: imageUrl,
+        sender: safeSender
+      };
+      
+      // Add to messageMap to prevent duplication
+      setMessageMap(prev => ({ ...prev, [tempId]: true }));
+      
+      // Update messages state safely
+      setMessages(prevMessages => {
+        return [tempMessage, ...prevMessages];
+      });
+      
+      // Send message with the image URL
+      const result = await chatService.sendMessage(
+        chatRoomId,
+        user.id,
+        caption,
+        imageUrl,
+        'image'
+      );
+      
+      if (!result.success) {
+        // Update the temp message to show error
+        setMessages(prev =>
+          prev.map(msg =>
+            msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
+          )
+        );
+        console.error('Failed to send trade item image:', result.error);
+      }
+    } catch (error) {
+      console.error('Error sending trade item image:', error);
     }
   };
 
@@ -1029,9 +1103,18 @@ export default function ChatScreen() {
                 <Text style={styles.headerTitle}>
                   {partnerProfile.full_name || partnerProfile.username || userName || 'User'}
                 </Text>
-                <Text style={styles.headerSubtitle}>
-                  {chatRoomId ? 'Online' : 'Connecting...'}
-                </Text>
+                <View style={styles.onlineStatusContainer}>
+                  {partnerOnline ? (
+                    <>
+                      <View style={styles.onlineIndicator} />
+                      <Text style={styles.headerSubtitle}>Online</Text>
+                    </>
+                  ) : (
+                    <Text style={styles.headerSubtitle}>
+                      {partnerLastSeen ? `Last seen ${formatLastSeen(partnerLastSeen)}` : 'Offline'}
+                    </Text>
+                  )}
+                </View>
               </>
             ) : (
               <>
@@ -1055,11 +1138,53 @@ export default function ChatScreen() {
         ) : messages && messages.length > 0 ? (
           <FlatList
             ref={flatListRef}
-            data={messages.filter(msg => msg !== null && msg !== undefined)}
-            keyExtractor={(item) => item?.id || `msg-${Date.now()}-${Math.random()}`}
-            renderItem={renderMessageItem}
+            data={messages.filter(msg => 
+              msg !== null && 
+              msg !== undefined && 
+              msg.id && 
+              typeof msg === 'object'
+            )}
+            keyExtractor={(item) => {
+              // Ensure each message has a truly unique key
+              if (!item || !item.id) {
+                return `fallback-${Date.now()}-${Math.random()}`;
+              }
+              
+              if (item.id.startsWith('temp-')) {
+                // For temporary messages, use the temp ID
+                return `temp-${item.id}`;
+              } else {
+                // For real messages, use the ID with a prefix
+                return `msg-${item.id}`;
+              }
+            }}
+            renderItem={({ item }) => {
+              try {
+                return renderMessageItem({ item });
+              } catch (error) {
+                console.error('Error rendering message:', error, item);
+                // Return a fallback UI for messages that fail to render
+                return (
+                  <View style={[styles.messageWrapper, styles.errorMessageWrapper]}>
+                    <View style={[styles.messageContainer, styles.errorMessage]}>
+                      <Text style={styles.errorMessageText}>
+                        Message could not be displayed
+                      </Text>
+                    </View>
+                  </View>
+                );
+              }
+            }}
             contentContainerStyle={styles.messagesContainer}
             inverted={true}
+            removeClippedSubviews={false}
+            maxToRenderPerBatch={10}
+            windowSize={10}
+            ListEmptyComponent={() => (
+              <View style={styles.noMessagesContainer}>
+                <Text style={styles.noMessagesText}>No messages yet</Text>
+              </View>
+            )}
           />
         ) : (
           <View style={styles.noMessagesContainer}>
@@ -1470,11 +1595,31 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 2,
   },
-  imageContent: {
+  imageWrapper: {
     width: 200,
     height: 200,
     borderRadius: 8,
     marginBottom: 4,
+    overflow: 'hidden',
+  },
+  imageContent: {
+    width: '100%',
+    height: '100%',
+  },
+  imageInner: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 8,
+  },
+  imageFallback: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+  },
+  imageFallbackText: {
+    fontSize: 16,
+    color: '#666666',
   },
   videoContainer: {
     width: 200,
@@ -1781,5 +1926,33 @@ const styles = StyleSheet.create({
     color: '#666666',
     minWidth: 30,
     textAlign: 'right',
+  },
+  errorMessageWrapper: {
+    marginVertical: 4,
+    maxWidth: '100%',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+  },
+  errorMessage: {
+    maxWidth: '80%',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 4,
+    backgroundColor: '#FFF0F0',
+  },
+  errorMessageText: {
+    fontSize: 16,
+    color: '#FF3B30',
+  },
+  onlineStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  onlineIndicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#4ADE80',
+    marginRight: 6,
   },
 }); 
