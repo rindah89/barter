@@ -5,7 +5,7 @@ import {
   View,
   Text,
   FlatList,
-  Image,
+  Image as RNImage,
   TextInput,
   TouchableOpacity,
   StyleSheet,
@@ -33,6 +33,7 @@ import MediaSourceModal from '@/components/MediaSourceModal';
 import { uploadFile } from '@/services/imageservice';
 import LoadingIndicator from '../components/LoadingIndicator';
 import { supabase } from '@/lib/supabase';
+import * as FileSystem from 'expo-file-system';
 import { presenceService } from '@/services/presenceService';
 
 export default function ChatScreen() {

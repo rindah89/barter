@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, Image, TouchableOpacity, Modal, TextInput, ScrollView, ActivityIndicator, Alert, Dimensions, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Modal, TextInput, ScrollView, ActivityIndicator, Alert, Dimensions, StatusBar } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Plus, Edit, Trash2, X, Camera, Tag, Info, Search, Image as ImageIcon } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
@@ -610,6 +611,8 @@ export default function MyItemsScreen() {
               onError={() => {
                 console.log('Error loading image for item:', item.id);
               }}
+              contentFit="cover"
+              transition={200}
             />
             {item.media_type === 'video' && (
               <View style={styles.videoIndicatorSmall}>
@@ -819,6 +822,8 @@ export default function MyItemsScreen() {
                                 onError={() => {
                                   console.log('Error loading media preview');
                                 }}
+                                contentFit="cover"
+                                transition={200}
                               />
                               {media.type === 'video' && (
                                 <View style={styles.videoIndicatorSmall}>

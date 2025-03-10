@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  Image,
   TouchableOpacity,
   Modal,
   ActivityIndicator,
@@ -26,6 +25,7 @@ import LoadingIndicator from '../../components/LoadingIndicator';
 import useProfile from '../../hooks/useProfile';
 import { useToast } from '../../lib/ToastContext';
 import { Tables } from '../../database.types';
+import { Image } from 'expo-image';
 
 // Define types using the database schema
 type Trade = Tables<'trades'>;
@@ -502,6 +502,8 @@ export default function TradesScreen() {
                       uri: item.receiver?.avatar_url || getDefaultAvatar(item.receiver?.name)
                     }}
                     style={styles.avatar}
+                    contentFit="cover"
+                    transition={200}
                   />
                   <View style={styles.chatIconOverlay}>
                     <MessageCircle color="#FFFFFF" size={14} />
@@ -523,6 +525,8 @@ export default function TradesScreen() {
                         : (item.proposer?.avatar_url || getDefaultAvatar(item.proposer?.name))
                     }}
                     style={styles.avatar}
+                    contentFit="cover"
+                    transition={200}
                   />
                   <View style={styles.chatIconOverlay}>
                     <MessageCircle color="#FFFFFF" size={14} />
@@ -567,6 +571,8 @@ export default function TradesScreen() {
               <Image
                 source={{ uri: item.requested_item?.image_url || 'https://via.placeholder.com/200?text=No+Image' }}
                 style={styles.likedItemImage}
+                contentFit="cover"
+                transition={200}
               />
               <View style={styles.categoryPill}>
                 <Text style={styles.categoryText}>
@@ -586,6 +592,8 @@ export default function TradesScreen() {
             <Image
               source={{ uri: item.offered_item?.image_url || 'https://via.placeholder.com/200?text=No+Image' }}
               style={styles.itemImage}
+              contentFit="cover"
+              transition={200}
             />
             <Text style={styles.itemName}>{item.offered_item?.name || 'Unknown Item'}</Text>
             <Text style={styles.tradeDirection}>
@@ -604,6 +612,8 @@ export default function TradesScreen() {
             <Image
               source={{ uri: item.requested_item?.image_url || 'https://via.placeholder.com/200?text=No+Image' }}
               style={styles.itemImage}
+              contentFit="cover"
+              transition={200}
             />
             <Text style={styles.itemName}>{item.requested_item?.name || 'Unknown Item'}</Text>
             <Text style={styles.tradeDirection}>
@@ -725,6 +735,8 @@ export default function TradesScreen() {
                             { uri: proposingTrade.offered_item.image_url } : 
                             { uri: 'https://via.placeholder.com/200?text=No+Image' }}
                           style={styles.detailItemImage}
+                          contentFit="cover"
+                          transition={200}
                         />
                         <Text style={styles.detailItemName}>{proposingTrade.offered_item?.name}</Text>
                         <Text style={styles.detailItemLabel}>You offer</Text>
@@ -735,6 +747,8 @@ export default function TradesScreen() {
                             { uri: proposingTrade.requested_item.image_url } : 
                             { uri: 'https://via.placeholder.com/200?text=No+Image' }}
                           style={styles.detailItemImage}
+                          contentFit="cover"
+                          transition={200}
                         />
                         <Text style={styles.detailItemName}>{proposingTrade.requested_item?.name}</Text>
                         <Text style={styles.detailItemLabel}>You request</Text>
@@ -808,6 +822,8 @@ export default function TradesScreen() {
                                 styles.partyAvatar,
                                 tradeDetails.proposer?.id === user?.id ? styles.disabledAvatar : {}
                               ]}
+                              contentFit="cover"
+                              transition={200}
                             />
                             {tradeDetails.proposer?.id !== user?.id && (
                               <View style={styles.chatIconOverlay}>
@@ -845,6 +861,8 @@ export default function TradesScreen() {
                                 styles.partyAvatar,
                                 tradeDetails.receiver?.id === user?.id ? styles.disabledAvatar : {}
                               ]}
+                              contentFit="cover"
+                              transition={200}
                             />
                             {tradeDetails.receiver?.id !== user?.id && (
                               <View style={styles.chatIconOverlay}>
@@ -866,6 +884,8 @@ export default function TradesScreen() {
                             { uri: tradeDetails.offeredItem.image_url } : 
                             { uri: 'https://via.placeholder.com/200?text=No+Image' }}
                           style={styles.detailItemImage}
+                          contentFit="cover"
+                          transition={200}
                         />
                         <Text style={styles.detailItemName}>{tradeDetails.offeredItem?.name}</Text>
                         <Text style={styles.detailItemLabel}>
@@ -883,6 +903,8 @@ export default function TradesScreen() {
                             { uri: tradeDetails.requestedItem.image_url } : 
                             { uri: 'https://via.placeholder.com/200?text=No+Image' }}
                           style={styles.detailItemImage}
+                          contentFit="cover"
+                          transition={200}
                         />
                         <Text style={styles.detailItemName}>{tradeDetails.requestedItem?.name}</Text>
                         <Text style={styles.detailItemLabel}>
