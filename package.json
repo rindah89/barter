@@ -14,7 +14,7 @@
     "@react-native-async-storage/async-storage": "1.23.1",
     "@react-navigation/bottom-tabs": "^7.2.0",
     "@react-navigation/native": "^7.0.14",
-    "@react-navigation/stack": "^6.3.20",
+    "@react-navigation/stack": "^7.0.0",
     "@supabase/supabase-js": "^2.39.7",
     "@uppy/core": "^4.4.2",
     "@uppy/progress-bar": "^4.2.1",
@@ -26,6 +26,8 @@
     "dotenv": "^16.4.7",
     "expo": "~52.0.36",
     "expo-asset": "~9.0.2",
+    "expo-av": "~15.0.2",
+    "expo-blur": "~12.9.2",
     "expo-constants": "^17.0.5",
     "expo-dev-client": "~5.0.12",
     "expo-document-picker": "^13.0.3",
@@ -62,8 +64,7 @@
     "react-native-url-polyfill": "^2.0.0",
     "react-native-web": "^0.19.13",
     "react-native-webview": "13.12.5",
-    "sharp": "^0.33.5",
-    "expo-av": "^15.0.2"
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
