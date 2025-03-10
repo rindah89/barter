@@ -1363,7 +1363,8 @@ export default function ChatScreen() {
               <Image
                 source={{ uri: selectedMedia.uri }}
                 style={styles.mediaPreviewImage}
-                resizeMode="contain"
+                contentFit="cover"
+                transition={200}
               />
             )}
             
