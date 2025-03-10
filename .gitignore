@@ -8,7 +8,7 @@ web-build/
 expo-env.d.ts
 
 # native
-/android/
+# /android/ - removing this line to include Android files in the build
 /ios/
 *.orig.*
 *.jks
