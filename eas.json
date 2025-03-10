@@ -9,7 +9,12 @@
       "distribution": "internal",
       "android": {
         "gradleCommand": ":app:assembleDebug",
-        "withoutCredentials": true
+        "withoutCredentials": true,
+        "buildType": "apk",
+        "prebuildCommand": "cd android && chmod +x gradlew"
+      },
+      "env": {
+        "EXPO_DEBUG": "true"
       }
     },
     "preview": {
@@ -18,6 +23,9 @@
         "buildType": "apk",
         "withoutCredentials": true,
         "prebuildCommand": "cd android && chmod +x gradlew"
+      },
+      "env": {
+        "EXPO_DEBUG": "true"
       }
     },
     "production": {

@@ -25,7 +25,7 @@ import { format } from 'date-fns';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import LottieView from 'lottie-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import FastImage from 'react-native-fast-image';
+import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import { Video } from 'expo-av';
@@ -33,7 +33,6 @@ import MediaSourceModal from '@/components/MediaSourceModal';
 import { uploadFile } from '@/services/imageservice';
 import LoadingIndicator from '../components/LoadingIndicator';
 import { supabase } from '@/lib/supabase';
-import * as FileSystem from 'expo-file-system';
 import { presenceService } from '@/services/presenceService';
 
 export default function ChatScreen() {
@@ -654,10 +653,11 @@ export default function ChatScreen() {
               >
                 {/* Use try-catch with error state to handle image loading errors */}
                 <View style={styles.imageContent}>
-                  <FastImage
+                  <Image
                     source={{ uri: item.media_uri }}
                     style={styles.imageInner}
-                    resizeMode={FastImage.resizeMode.cover}
+                    contentFit="cover"
+                    transition={200}
                     onError={() => {
                       console.log('Error loading image:', item.media_uri);
                     }}
@@ -747,10 +747,10 @@ export default function ChatScreen() {
           )}
           
           {item.message_type === 'gif' && item.gif_url ? (
-            <FastImage
+            <Image
               source={{ uri: item.gif_url }}
               style={styles.gifImage}
-              resizeMode={FastImage.resizeMode.contain}
+              contentFit="contain"
             />
           ) : item.message_type === 'text' && item.content ? (
             <Text
