@@ -105,17 +105,21 @@ export default function TradesScreen() {
     const partnerId = trade.proposer_id === user?.id ? trade.receiver_id : trade.proposer_id;
     const partnerName = trade.proposer_id === user?.id ? trade.receiver?.name : trade.proposer?.name;
     
-    // Create a formal message with trade details
-    let tradeDetailsMessage = "Regarding our trade proposal: ";
+    // Create a formal message with trade details - without mentioning the trade ID
+    let tradeDetailsMessage = "Hello! I'd like to discuss our trade proposal. ";
     
     // Determine which item is being offered by the message sender
     const isUserProposer = trade.proposer_id === user?.id;
     const userOfferedItem = isUserProposer ? trade.offered_item : trade.requested_item;
     const userRequestedItem = isUserProposer ? trade.requested_item : trade.offered_item;
     
+    // Get image URLs for the items
+    const offeredItemImageUrl = userOfferedItem?.image_url || null;
+    const requestedItemImageUrl = userRequestedItem?.image_url || null;
+    
     if (userOfferedItem?.name && userRequestedItem?.name) {
       // Add the item the user is offering
-      tradeDetailsMessage += `I am offering ${userOfferedItem.name}`;
+      tradeDetailsMessage += `I am offering my ${userOfferedItem.name}`;
       
       // Add cash amount if it exists and the user is the one offering cash
       if (trade.cash_amount && trade.cash_amount > 0 && isUserProposer) {
@@ -132,16 +136,20 @@ export default function TradesScreen() {
     }
     
     // Add a polite closing
-    tradeDetailsMessage += ". I would like to discuss this trade with you.";
+    tradeDetailsMessage += ". Would you be interested in discussing this further?";
     
-    // Navigate to chat screen with partner ID, initial message, and trade ID only
+    // Navigate to chat screen with partner ID, initial message, trade ID, and item images
     router.push({
       pathname: '/chat',
       params: {
         partnerId,
         partnerName,
         initialMessage: tradeDetailsMessage,
-        tradeId: trade.id
+        tradeId: trade.id,
+        offeredItemImageUrl,
+        requestedItemImageUrl,
+        offeredItemName: userOfferedItem?.name,
+        requestedItemName: userRequestedItem?.name
       }
     });
   };

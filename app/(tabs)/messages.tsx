@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import { useRouter } from 'expo-router';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../lib/AuthContext';
 import { chatService, ChatRoom } from '../../services/chatService';
+import { presenceService } from '../../services/presenceService';
 import { Tables } from '../../database.types';
 import LottieView from 'lottie-react-native';
 
@@ -50,12 +51,23 @@ export default function MessagesScreen() {
   const [loadingChats, setLoadingChats] = useState(false);
   const [creatingChatRoom, setCreatingChatRoom] = useState<{[key: string]: boolean}>({});
   const [participants, setParticipants] = useState<{[key: string]: any}>({});
+  const [onlineUsers, setOnlineUsers] = useState<{[key: string]: boolean}>({});
+  const presenceSubscriptionsRef = useRef<{[key: string]: any}>({});
 
   // Load user's chat rooms
   useEffect(() => {
     if (user?.id) {
       fetchUserChatRooms();
     }
+    
+    return () => {
+      // Clean up all presence subscriptions
+      Object.values(presenceSubscriptionsRef.current).forEach(subscription => {
+        if (subscription && subscription.unsubscribe) {
+          subscription.unsubscribe();
+        }
+      });
+    };
   }, [user]);
 
   const fetchUserChatRooms = async () => {
@@ -93,6 +105,9 @@ export default function MessagesScreen() {
           }, {} as {[key: string]: any});
           
           setParticipants(participantsMap);
+          
+          // Check online status for all participants
+          checkOnlineStatus(Array.from(participantIds));
         }
       } else if (result.error) {
         console.error('Error fetching chat rooms:', result.error);
@@ -111,6 +126,68 @@ export default function MessagesScreen() {
       );
     } finally {
       setLoadingChats(false);
+    }
+  };
+  
+  // Check online status for all participants
+  const checkOnlineStatus = async (userIds: string[]) => {
+    try {
+      // Clean up existing subscriptions
+      Object.values(presenceSubscriptionsRef.current).forEach(subscription => {
+        if (subscription && subscription.unsubscribe) {
+          subscription.unsubscribe();
+        }
+      });
+      
+      presenceSubscriptionsRef.current = {};
+      
+      // Check initial online status for each user
+      const onlineStatusMap: {[key: string]: boolean} = {};
+      
+      await Promise.all(userIds.map(async (userId) => {
+        try {
+          const result = await presenceService.isUserOnline(userId);
+          onlineStatusMap[userId] = result.success ? result.isOnline : false;
+          
+          // Set up subscription for this user
+          setupPresenceSubscription(userId);
+        } catch (error) {
+          console.error(`Error checking online status for user ${userId}:`, error);
+          onlineStatusMap[userId] = false;
+        }
+      }));
+      
+      setOnlineUsers(onlineStatusMap);
+    } catch (error) {
+      console.error('Error checking online status:', error);
+    }
+  };
+  
+  // Set up presence subscription for a user
+  const setupPresenceSubscription = (userId: string) => {
+    try {
+      // Clean up existing subscription for this user
+      if (presenceSubscriptionsRef.current[userId] && presenceSubscriptionsRef.current[userId].unsubscribe) {
+        presenceSubscriptionsRef.current[userId].unsubscribe();
+      }
+      
+      // Create new subscription
+      presenceSubscriptionsRef.current[userId] = presenceService.subscribeToUserPresence(userId, (payload) => {
+        if (payload.eventType === 'UPDATE') {
+          const presenceData = payload.new;
+          
+          // Check if user is online (is_online flag and last_seen within 2 minutes)
+          const isOnline = presenceData.is_online && 
+            new Date(presenceData.last_seen).getTime() > Date.now() - 2 * 60 * 1000;
+          
+          setOnlineUsers(prev => ({
+            ...prev,
+            [userId]: isOnline
+          }));
+        }
+      });
+    } catch (error) {
+      console.error(`Error setting up presence subscription for user ${userId}:`, error);
     }
   };
 
@@ -257,8 +334,24 @@ export default function MessagesScreen() {
       );
     }
     
-    const lastMessage = item.last_message?.content || '';
+    // Format the last message based on message type
+    let lastMessageText = 'Start a conversation...';
+    if (item.last_message) {
+      if (item.last_message.message_type === 'image') {
+        lastMessageText = item.last_message.content || '📷 Image';
+      } else if (item.last_message.message_type === 'video') {
+        lastMessageText = item.last_message.content || '🎥 Video';
+      } else if (item.last_message.message_type === 'voice') {
+        lastMessageText = '🎤 Voice message';
+      } else if (item.last_message.message_type === 'file') {
+        lastMessageText = '📎 File';
+      } else if (item.last_message.content) {
+        lastMessageText = item.last_message.content;
+      }
+    }
+    
     const timestamp = formatTimestamp(item.last_message?.created_at || item.created_at);
+    const isOnline = onlineUsers[otherParticipantId] || false;
     
     return (
       <TouchableOpacity
@@ -270,11 +363,18 @@ export default function MessagesScreen() {
         )}
         disabled={creatingChatRoom[otherParticipant.id]}
       >
-        <Image
-          source={{ uri: otherParticipant.avatar_url || undefined }}
-          style={styles.avatar}
-          defaultSource={require('../../assets/images/default-avatar.png')}
-        />
+        <View style={styles.avatarContainer}>
+          <Image
+            source={{ uri: otherParticipant.avatar_url || undefined }}
+            style={styles.avatar}
+            defaultSource={require('../../assets/images/default-avatar.png')}
+          />
+          {isOnline ? (
+            <View style={styles.onlineIndicator} />
+          ) : (
+            <View style={styles.offlineIndicator} />
+          )}
+        </View>
         <View style={styles.chatInfo}>
           <View style={styles.chatHeader}>
             <Text style={styles.chatName}>{otherParticipant.name || 'User'}</Text>
@@ -288,7 +388,7 @@ export default function MessagesScreen() {
               </View>
             ) : (
               <Text style={styles.lastMessage} numberOfLines={1}>
-                {lastMessage || 'Start a conversation...'}
+                {lastMessageText}
               </Text>
             )}
           </View>
@@ -298,31 +398,42 @@ export default function MessagesScreen() {
   };
 
   // Render search result item
-  const renderSearchResultItem = ({ item }: { item: SearchResult }) => (
-    <TouchableOpacity
-      style={styles.searchResultItem}
-      onPress={() => navigateToChat(item.id, item.name, item.avatar_url)}
-      disabled={creatingChatRoom[item.id]}
-    >
-      {item.avatar_url ? (
-        <Image
-          source={{ uri: item.avatar_url }}
-          style={styles.searchResultAvatar}
-          defaultSource={require('../../assets/images/default-avatar.png')}
-        />
-      ) : (
-        <View style={styles.searchResultAvatarPlaceholder}>
-          <User color="#AAAAAA" size={24} />
+  const renderSearchResultItem = ({ item }: { item: SearchResult }) => {
+    const isOnline = onlineUsers[item.id] || false;
+    
+    return (
+      <TouchableOpacity
+        style={styles.searchResultItem}
+        onPress={() => navigateToChat(item.id, item.name, item.avatar_url)}
+        disabled={creatingChatRoom[item.id]}
+      >
+        <View style={styles.searchResultAvatarContainer}>
+          {item.avatar_url ? (
+            <Image
+              source={{ uri: item.avatar_url }}
+              style={styles.searchResultAvatar}
+              defaultSource={require('../../assets/images/default-avatar.png')}
+            />
+          ) : (
+            <View style={styles.searchResultAvatarPlaceholder}>
+              <User color="#AAAAAA" size={24} />
+            </View>
+          )}
+          {isOnline ? (
+            <View style={styles.searchResultOnlineIndicator} />
+          ) : (
+            <View style={styles.searchResultOfflineIndicator} />
+          )}
         </View>
-      )}
-      <Text style={styles.searchResultName}>{item.name || 'User'}</Text>
-      {creatingChatRoom[item.id] ? (
-        <ActivityIndicator size="small" color="#22C55E" />
-      ) : (
-        <MessageCircle color="#22C55E" size={20} />
-      )}
-    </TouchableOpacity>
-  );
+        <Text style={styles.searchResultName}>{item.name || 'User'}</Text>
+        {creatingChatRoom[item.id] ? (
+          <ActivityIndicator size="small" color="#22C55E" />
+        ) : (
+          <MessageCircle color="#22C55E" size={20} />
+        )}
+      </TouchableOpacity>
+    );
+  };
 
   // Empty chat component with Lottie animation
   const EmptyChatComponent = () => (
@@ -487,11 +598,37 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#F2F2F7',
   },
-  avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  avatarContainer: {
+    position: 'relative',
     marginRight: 12,
+  },
+  avatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#F0F0F0',
+  },
+  onlineIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#22C55E',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
+  offlineIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#EF4444',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   chatInfo: {
     flex: 1,
@@ -549,6 +686,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#F2F2F7',
   },
+  searchResultAvatarContainer: {
+    position: 'relative',
+  },
   searchResultAvatar: {
     width: 48,
     height: 48,
@@ -569,6 +709,28 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#333333',
     flex: 1,
+  },
+  searchResultOnlineIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#22C55E',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+  },
+  searchResultOfflineIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#EF4444',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
   },
   loadingContainer: {
     flex: 1,

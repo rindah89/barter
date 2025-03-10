@@ -2,7 +2,6 @@ import { supabase } from '@/lib/supabase';
 import { Tables } from '@/database.types';
 import { uploadFile, getSupabaseFileUrl } from '@/services/imageservice';
 import * as FileSystem from 'expo-file-system';
-import { Audio } from 'expo-av';
 
 export type ChatRoom = Tables<'chat_rooms'> & {
   participants: Tables<'profiles'>[];
@@ -18,6 +17,7 @@ export type Message = Tables<'messages'> & {
   message_type: 'text' | 'image' | 'video' | 'voice' | 'deleted' | 'gif' | 'emoji';
   duration?: number;
   gif_url?: string;
+  metadata?: any;
 };
 
 export const chatService = {
@@ -114,6 +114,7 @@ export const chatService = {
         message_type: messageType,
         duration,
         created_at: new Date().toISOString(),
+        metadata: metadata || null,
       };
       
       // Insert the message without chaining select
@@ -148,6 +149,7 @@ export const chatService = {
       const message: Message = {
         ...fetchedMessage,
         sender: senderProfile,
+        metadata: metadata || null,
       };
 
       return { success: true, message };

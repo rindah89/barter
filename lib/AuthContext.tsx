@@ -1,8 +1,9 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import { router, useRootNavigationState } from 'expo-router';
-import { ActivityIndicator, View, StyleSheet } from 'react-native';
+import { ActivityIndicator, View, StyleSheet, AppState } from 'react-native';
+import { presenceService } from '@/services/presenceService';
 
 interface AuthContextType {
   session: Session | null;
@@ -25,6 +26,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const rootNavigationState = useRootNavigationState();
+  const appState = useRef(AppState.currentState);
+  const presenceIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initialize the auth state on component mount
   useEffect(() => {
@@ -38,6 +41,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.log('[AuthContext] Got session:', { hasSession: !!data.session });
         setSession(data.session);
         setUser(data.session?.user ?? null);
+        
+        // Initialize presence if user is logged in
+        if (data.session?.user) {
+          await initializePresence(data.session.user.id);
+        }
       } catch (error) {
         console.error('[AuthContext] Error loading auth session:', error);
       } finally {
@@ -51,19 +59,92 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for auth state changes
     console.log('[AuthContext] Setting up auth state change listener');
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, newSession) => {
+      async (_event, newSession) => {
         console.log('[AuthContext] Auth state changed:', { event: _event, hasSession: !!newSession });
         setSession(newSession);
         setUser(newSession?.user ?? null);
+        
+        // Handle presence based on auth state change
+        if (_event === 'SIGNED_IN' && newSession?.user) {
+          await initializePresence(newSession.user.id);
+        } else if (_event === 'SIGNED_OUT') {
+          cleanupPresence();
+        }
       }
     );
+    
+    // Set up AppState listener for background/foreground transitions
+    const subscription2 = AppState.addEventListener('change', nextAppState => {
+      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+        // App has come to the foreground
+        console.log('[AuthContext] App has come to the foreground');
+        if (user) {
+          presenceService.updatePresence(user.id).catch(err => {
+            console.error('[AuthContext] Error updating presence on foreground:', err);
+          });
+        }
+      } else if (nextAppState.match(/inactive|background/) && appState.current === 'active') {
+        // App has gone to the background
+        console.log('[AuthContext] App has gone to the background');
+        if (user) {
+          presenceService.markOffline(user.id).catch(err => {
+            console.error('[AuthContext] Error marking user offline on background:', err);
+          });
+        }
+      }
+      
+      appState.current = nextAppState;
+    });
 
-    // Clean up the subscription when unmounting
+    // Clean up the subscriptions when unmounting
     return () => {
       console.log('[AuthContext] Cleaning up auth state change listener');
       subscription.unsubscribe();
+      subscription2.remove();
+      cleanupPresence();
     };
   }, []);
+  
+  // Initialize presence tracking
+  const initializePresence = async (userId: string) => {
+    console.log('[AuthContext] Initializing presence for user:', userId);
+    
+    // Update presence immediately
+    try {
+      await presenceService.updatePresence(userId);
+    } catch (error) {
+      console.error('[AuthContext] Error initializing presence:', error);
+    }
+    
+    // Set up interval to update presence
+    if (presenceIntervalRef.current) {
+      clearInterval(presenceIntervalRef.current);
+    }
+    
+    presenceIntervalRef.current = setInterval(() => {
+      if (userId) {
+        presenceService.updatePresence(userId).catch(err => {
+          console.error('[AuthContext] Error updating presence in interval:', err);
+        });
+      }
+    }, 60000); // Update every minute
+  };
+  
+  // Clean up presence tracking
+  const cleanupPresence = () => {
+    console.log('[AuthContext] Cleaning up presence');
+    
+    if (presenceIntervalRef.current) {
+      clearInterval(presenceIntervalRef.current);
+      presenceIntervalRef.current = null;
+    }
+    
+    if (user?.id) {
+      presenceService.markOffline(user.id).catch(err => {
+        console.error('[AuthContext] Error marking user offline during cleanup:', err);
+      });
+    }
+  };
 
   // Effect to handle navigation after sign out
   useEffect(() => {
@@ -165,6 +246,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Sign out
   const signOut = async () => {
     try {
+      // Mark user as offline before signing out
+      if (user?.id) {
+        await presenceService.markOffline(user.id);
+      }
+      
       setIsSigningOut(true);
       await supabase.auth.signOut();
       // Navigation will be handled by the effect above

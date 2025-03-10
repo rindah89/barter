@@ -30,12 +30,6 @@
           "supportsPictureInPicture": true
         }
       ],
-      [
-        "expo-audio",
-        {
-          "supportsBackgroundPlayback": true
-        }
-      ],
       "expo-secure-store"
     ],
     "experiments": {
