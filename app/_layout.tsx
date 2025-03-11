@@ -15,15 +15,15 @@ declare global {
 }
 
 // Custom error boundary component
-export function ErrorBoundary({ children }: { children: React.ReactNode }) {
-  const [hasError, setHasError] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+export function ErrorBoundary({ children, error }: { children: React.ReactNode, error?: Error }) {
+  const [hasError, setHasError] = useState(!!error);
+  const [errorState, setErrorState] = useState<Error | null>(error || null);
 
   useEffect(() => {
     // Add global error handler using React Native's ErrorUtils
     const errorHandler = (e: Error) => {
       console.error('[ErrorBoundary] Caught global error:', e);
-      setError(e);
+      setErrorState(e);
       setHasError(true);
     };
 
@@ -46,13 +46,28 @@ export function ErrorBoundary({ children }: { children: React.ReactNode }) {
     return (
       <View style={styles.errorContainer}>
         <Text style={styles.errorTitle}>Something went wrong</Text>
-        <Text style={styles.errorMessage}>{error?.message || 'Unknown error'}</Text>
+        <Text style={styles.errorMessage}>
+          {errorState?.message || 'An unknown error occurred'}
+        </Text>
         <Text style={styles.errorHint}>Try restarting the app</Text>
       </View>
     );
   }
 
   return children;
+}
+
+// Custom error view for Expo Router
+export function ErrorComponent({ error }: { error: Error | null }) {
+  return (
+    <View style={styles.errorContainer}>
+      <Text style={styles.errorTitle}>Navigation Error</Text>
+      <Text style={styles.errorMessage}>
+        {error?.message || 'An unknown navigation error occurred'}
+      </Text>
+      <Text style={styles.errorHint}>Please try again or restart the app</Text>
+    </View>
+  );
 }
 
 // Make ErrorBoundary available to expo-router
@@ -99,7 +114,7 @@ export default function RootLayout() {
 
   console.log('[RootLayout] Setting up providers and navigation stack');
   return (
-    <ExpoRouterErrorBoundary>
+    <ExpoRouterErrorBoundary fallback={props => <ErrorComponent error={props.error} />}>
       <AuthProvider>
         <ToastProvider>
           <LoadingProvider>
