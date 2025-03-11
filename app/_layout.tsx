@@ -20,15 +20,26 @@ function ErrorBoundary({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    // Add global error handler
-    const errorHandler = (e: ErrorEvent) => {
-      console.error('[ErrorBoundary] Caught global error:', e.error);
-      setError(e.error);
+    // Add global error handler using React Native's ErrorUtils
+    const errorHandler = (e: Error) => {
+      console.error('[ErrorBoundary] Caught global error:', e);
+      setError(e);
       setHasError(true);
     };
 
-    window.addEventListener('error', errorHandler);
-    return () => window.removeEventListener('error', errorHandler);
+    // Set up the error handler
+    if (global.ErrorUtils) {
+      global.ErrorUtils.setGlobalHandler(errorHandler);
+    }
+
+    return () => {
+      // Reset to default handler on cleanup
+      if (global.ErrorUtils) {
+        global.ErrorUtils.setGlobalHandler((error: Error) => {
+          console.error(error);
+        });
+      }
+    };
   }, []);
 
   if (hasError) {
@@ -60,17 +71,22 @@ export default function RootLayout() {
     console.log('[RootLayout] Supabase URL available:', !!supabaseUrl);
     console.log('[RootLayout] Supabase key available:', !!supabaseKey);
     
-    window.frameworkReady?.();
-    
-    // Add unhandled promise rejection handler
-    const rejectionHandler = (event: PromiseRejectionEvent) => {
-      console.error('[RootLayout] Unhandled promise rejection:', event.reason);
-    };
-    
-    window.addEventListener('unhandledrejection', rejectionHandler);
-    return () => {
-      window.removeEventListener('unhandledrejection', rejectionHandler);
-    };
+    // Add unhandled promise rejection handler using ErrorUtils
+    if (global.ErrorUtils) {
+      const rejectionHandler = (error: Error) => {
+        console.error('[RootLayout] Unhandled promise rejection:', error);
+      };
+      
+      const originalHandler = global.ErrorUtils.getGlobalHandler();
+      global.ErrorUtils.setGlobalHandler((error) => {
+        rejectionHandler(error);
+        originalHandler(error);
+      });
+      
+      return () => {
+        global.ErrorUtils.setGlobalHandler(originalHandler);
+      };
+    }
   }, []);
 
   console.log('[RootLayout] Setting up providers and navigation stack');
