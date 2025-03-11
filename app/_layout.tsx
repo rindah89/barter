@@ -5,19 +5,26 @@ import { AuthProvider } from '../lib/AuthContext';
 import { ToastProvider } from '../lib/ToastContext';
 import { LoadingProvider } from '../lib/LoadingContext';
 import LoadingOverlay from '../components/LoadingOverlay';
-import { Platform } from 'react-native';
+import { Platform, View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Constants from 'expo-constants';
 import { 
   StandardErrorView, 
   ErrorBoundaryFallback, 
   logError, 
   SafeErrorView 
-} from '../lib/ErrorUtils.tsx';
+} from '../lib/ErrorUtils';
+import { captureConsoleLogs } from '../lib/LogCapture';
 
 declare global {
   interface Window {
     frameworkReady?: () => void;
   }
+}
+
+// Initialize log capture system
+if (__DEV__) {
+  captureConsoleLogs();
+  console.log('[App] Console log capture initialized');
 }
 
 // Custom error boundary component
@@ -63,6 +70,53 @@ export const unstable_settings = {
   ErrorBoundary: ErrorBoundary,
 };
 
+// Debug button component that appears in development mode
+function DebugButton() {
+  const [showDebug, setShowDebug] = useState(false);
+  const [pressCount, setPressCount] = useState(0);
+  
+  // Only show in development mode
+  const isDev = process.env.NODE_ENV === 'development' || __DEV__;
+  
+  if (!isDev) return null;
+  
+  const handlePress = () => {
+    setPressCount(prev => {
+      const newCount = prev + 1;
+      // Show debug after 5 presses
+      if (newCount >= 5) {
+        setShowDebug(true);
+      }
+      return newCount;
+    });
+  };
+  
+  if (!showDebug) {
+    return (
+      <TouchableOpacity 
+        style={styles.hiddenDebugButton} 
+        onPress={handlePress}
+        activeOpacity={1}
+      >
+        <View />
+      </TouchableOpacity>
+    );
+  }
+  
+  return (
+    <TouchableOpacity 
+      style={styles.debugButton} 
+      onPress={() => {
+        // Navigate to debug screen
+        // This will be handled by the router
+        window.location.href = '/debug';
+      }}
+    >
+      <Text style={styles.debugButtonText}>Debug</Text>
+    </TouchableOpacity>
+  );
+}
+
 export default function RootLayout() {
   console.log('[RootLayout] Rendering root layout');
   
@@ -72,6 +126,7 @@ export default function RootLayout() {
     // Log device info
     console.log('[RootLayout] Platform:', Platform.OS);
     console.log('[RootLayout] App version:', Constants.expoConfig?.version);
+    console.log('[RootLayout] Development mode:', __DEV__ ? 'Yes' : 'No');
     
     // Check if Supabase config is available
     const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -94,6 +149,15 @@ export default function RootLayout() {
       return () => {
         global.ErrorUtils.setGlobalHandler(originalHandler);
       };
+    }
+    
+    // Log any startup errors that might have occurred
+    const startupErrors = global.__ERRORS__ || [];
+    if (startupErrors.length > 0) {
+      console.log('[RootLayout] Found startup errors:', startupErrors.length);
+      startupErrors.forEach((error: any) => {
+        logError(error, 'StartupError');
+      });
     }
   }, []);
 
@@ -120,12 +184,44 @@ export default function RootLayout() {
               <Stack.Screen name="chat-selection" options={{ headerShown: false }} />
               <Stack.Screen name="chat" options={{ headerShown: false }} />
               <Stack.Screen name="item-details" options={{ headerShown: false }} />
+              <Stack.Screen name="debug" options={{ headerShown: true }} />
             </Stack>
             <LoadingOverlay />
             <StatusBar style="auto" />
+            <DebugButton />
           </LoadingProvider>
         </ToastProvider>
       </AuthProvider>
     </ExpoRouterErrorBoundary>
   );
 }
+
+const styles = StyleSheet.create({
+  debugButton: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    backgroundColor: 'rgba(44, 62, 80, 0.8)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+  },
+  debugButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
+  hiddenDebugButton: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 50,
+    height: 50,
+    zIndex: 999,
+  },
+});
