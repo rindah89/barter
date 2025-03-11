@@ -14,7 +14,9 @@
         "prebuildCommand": "cd android && chmod +x gradlew"
       },
       "env": {
-        "EXPO_DEBUG": "true"
+        "EXPO_DEBUG": "true",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://gwskbuserenviqctthqt.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd3c2tidXNlcmVudmlxY3R0aHF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA2ODY1MzYsImV4cCI6MjA1NjI2MjUzNn0.TdrV123kRCGb7sLoc5iSaLvxJy6f-w0n8ejuWBjFL7o"
       }
     },
     "preview": {
@@ -25,13 +27,19 @@
         "prebuildCommand": "cd android && chmod +x gradlew"
       },
       "env": {
-        "EXPO_DEBUG": "true"
+        "EXPO_DEBUG": "true",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://gwskbuserenviqctthqt.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd3c2tidXNlcmVudmlxY3R0aHF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA2ODY1MzYsImV4cCI6MjA1NjI2MjUzNn0.TdrV123kRCGb7sLoc5iSaLvxJy6f-w0n8ejuWBjFL7o"
       }
     },
     "production": {
       "autoIncrement": true,
       "android": {
         "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://gwskbuserenviqctthqt.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd3c2tidXNlcmVudmlxY3R0aHF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA2ODY1MzYsImV4cCI6MjA1NjI2MjUzNn0.TdrV123kRCGb7sLoc5iSaLvxJy6f-w0n8ejuWBjFL7o"
       }
     }
   },
