@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, ErrorBoundary as ExpoRouterErrorBoundary } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../lib/AuthContext';
 import { ToastProvider } from '../lib/ToastContext';
@@ -14,8 +14,8 @@ declare global {
   }
 }
 
-// Simple error boundary component
-function ErrorBoundary({ children }: { children: React.ReactNode }) {
+// Custom error boundary component
+export function ErrorBoundary({ children }: { children: React.ReactNode }) {
   const [hasError, setHasError] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -55,6 +55,14 @@ function ErrorBoundary({ children }: { children: React.ReactNode }) {
   return children;
 }
 
+// Make ErrorBoundary available to expo-router
+export const unstable_settings = {
+  // Ensure that reloading on `/modal` keeps a back button present.
+  initialRouteName: 'index',
+  // Used for error handling in expo-router
+  ErrorBoundary: ErrorBoundary,
+};
+
 export default function RootLayout() {
   console.log('[RootLayout] Rendering root layout');
   
@@ -91,7 +99,7 @@ export default function RootLayout() {
 
   console.log('[RootLayout] Setting up providers and navigation stack');
   return (
-    <ErrorBoundary>
+    <ExpoRouterErrorBoundary>
       <AuthProvider>
         <ToastProvider>
           <LoadingProvider>
@@ -118,7 +126,7 @@ export default function RootLayout() {
           </LoadingProvider>
         </ToastProvider>
       </AuthProvider>
-    </ErrorBoundary>
+    </ExpoRouterErrorBoundary>
   );
 }
 

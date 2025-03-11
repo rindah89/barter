@@ -3,15 +3,19 @@ import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build
 import android.os.Bundle
+import android.content.Intent
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
 import com.facebook.react.defaults.DefaultReactActivityDelegate
+import com.facebook.react.modules.core.DeviceEventManagerModule
 
 import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
+  private var pendingIntent: Intent? = null
+  
   override fun onCreate(savedInstanceState: Bundle?) {
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.
@@ -21,6 +25,28 @@ class MainActivity : ReactActivity() {
     SplashScreenManager.registerOnActivity(this)
     // @generated end expo-splashscreen
     super.onCreate(null)
+    
+    // Store the initial intent if it exists
+    intent?.let { 
+      pendingIntent = it
+    }
+  }
+
+  override fun onNewIntent(intent: Intent?) {
+    super.onNewIntent(intent)
+    // Store the intent to be processed when the context is ready
+    pendingIntent = intent
+    tryProcessPendingIntent()
+  }
+
+  private fun tryProcessPendingIntent() {
+    val reactInstanceManager = reactNativeHost.reactInstanceManager
+    if (reactInstanceManager.hasStartedCreatingInitialContext() && pendingIntent != null) {
+      // Process the pending intent only when the React context is ready
+      val intent = pendingIntent
+      pendingIntent = null
+      super.onNewIntent(intent)
+    }
   }
 
   /**

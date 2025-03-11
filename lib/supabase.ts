@@ -14,13 +14,20 @@ export type UserInterest = Tables<'user_interests'>;
 export type Review = Tables<'reviews'>;
 export type LikedItem = Tables<'liked_items'>;
 
-// Get Supabase URL and anon key from environment variables
-const supabaseUrl =
-  Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_URL ||
-  process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey =
-  Constants.expoConfig?.extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+// Hardcoded fallback values (only use in development)
+const FALLBACK_SUPABASE_URL = 'https://gwskbuserenviqctthqt.supabase.co';
+const FALLBACK_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd3c2tidXNlcmVudmlxY3R0aHF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDA2ODY1MzYsImV4cCI6MjA1NjI2MjUzNn0.TdrV123kRCGb7sLoc5iSaLvxJy6f-w0n8ejuWBjFL7o';
+
+// Get Supabase URL and anon key from environment variables with fallbacks
+const supabaseUrl = 
+  process.env.EXPO_PUBLIC_SUPABASE_URL || 
+  Constants.expoConfig?.extra?.SUPABASE_URL || 
+  FALLBACK_SUPABASE_URL;
+
+const supabaseAnonKey = 
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 
+  Constants.expoConfig?.extra?.SUPABASE_ANON_KEY || 
+  FALLBACK_SUPABASE_KEY;
 
 // Validate Supabase configuration
 if (!supabaseUrl || !supabaseAnonKey) {
