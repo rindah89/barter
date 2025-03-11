@@ -5,8 +5,14 @@ import { AuthProvider } from '../lib/AuthContext';
 import { ToastProvider } from '../lib/ToastContext';
 import { LoadingProvider } from '../lib/LoadingContext';
 import LoadingOverlay from '../components/LoadingOverlay';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { Platform } from 'react-native';
 import Constants from 'expo-constants';
+import { 
+  StandardErrorView, 
+  ErrorBoundaryFallback, 
+  logError, 
+  SafeErrorView 
+} from '../lib/ErrorUtils';
 
 declare global {
   interface Window {
@@ -22,7 +28,7 @@ export function ErrorBoundary({ children, error }: { children: React.ReactNode, 
   useEffect(() => {
     // Add global error handler using React Native's ErrorUtils
     const errorHandler = (e: Error) => {
-      console.error('[ErrorBoundary] Caught global error:', e);
+      logError(e, 'ErrorBoundary');
       setErrorState(e);
       setHasError(true);
     };
@@ -43,31 +49,10 @@ export function ErrorBoundary({ children, error }: { children: React.ReactNode, 
   }, []);
 
   if (hasError) {
-    return (
-      <View style={styles.errorContainer}>
-        <Text style={styles.errorTitle}>Something went wrong</Text>
-        <Text style={styles.errorMessage}>
-          {errorState?.message || 'An unknown error occurred'}
-        </Text>
-        <Text style={styles.errorHint}>Try restarting the app</Text>
-      </View>
-    );
+    return <SafeErrorView error={errorState} />;
   }
 
   return children;
-}
-
-// Custom error view for Expo Router
-export function ErrorComponent({ error }: { error: Error | null }) {
-  return (
-    <View style={styles.errorContainer}>
-      <Text style={styles.errorTitle}>Navigation Error</Text>
-      <Text style={styles.errorMessage}>
-        {error?.message || 'An unknown navigation error occurred'}
-      </Text>
-      <Text style={styles.errorHint}>Please try again or restart the app</Text>
-    </View>
-  );
 }
 
 // Make ErrorBoundary available to expo-router
@@ -97,7 +82,7 @@ export default function RootLayout() {
     // Add unhandled promise rejection handler using ErrorUtils
     if (global.ErrorUtils) {
       const rejectionHandler = (error: Error) => {
-        console.error('[RootLayout] Unhandled promise rejection:', error);
+        logError(error, 'UnhandledPromiseRejection');
       };
       
       const originalHandler = global.ErrorUtils.getGlobalHandler();
@@ -114,7 +99,7 @@ export default function RootLayout() {
 
   console.log('[RootLayout] Setting up providers and navigation stack');
   return (
-    <ExpoRouterErrorBoundary fallback={props => <ErrorComponent error={props.error} />}>
+    <ExpoRouterErrorBoundary fallback={props => <ErrorBoundaryFallback error={props.error} />}>
       <AuthProvider>
         <ToastProvider>
           <LoadingProvider>
@@ -144,29 +129,3 @@ export default function RootLayout() {
     </ExpoRouterErrorBoundary>
   );
 }
-
-const styles = StyleSheet.create({
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-    backgroundColor: '#f8f8f8',
-  },
-  errorTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    marginBottom: 10,
-    color: '#e74c3c',
-  },
-  errorMessage: {
-    fontSize: 16,
-    textAlign: 'center',
-    marginBottom: 20,
-    color: '#333',
-  },
-  errorHint: {
-    fontSize: 14,
-    color: '#7f8c8d',
-  },
-});
