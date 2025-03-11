@@ -12,7 +12,7 @@ import {
   ErrorBoundaryFallback, 
   logError, 
   SafeErrorView 
-} from '../lib/ErrorUtils';
+} from '../lib/ErrorUtils.tsx';
 
 declare global {
   interface Window {
