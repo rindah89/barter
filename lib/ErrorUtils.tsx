@@ -23,8 +23,8 @@ const MAX_STORED_ERRORS = 20;
 
 // Safe error message extraction that handles undefined errors
 export function getErrorMessage(error: any): string {
-  if (!error) {
-    return 'An unknown error occurred';
+  if (error === undefined || error === null) {
+    return 'An unknown error occurred (error object is undefined or null)';
   }
   
   if (typeof error === 'string') {
@@ -50,13 +50,13 @@ export function getErrorMessage(error: any): string {
     }
   }
   
-  return 'An unknown error occurred';
+  return `An unknown error occurred (type: ${typeof error})`;
 }
 
 // Get stack trace from error
 export function getErrorStack(error: any): string | undefined {
-  if (!error) {
-    return undefined;
+  if (error === undefined || error === null) {
+    return 'No stack trace available (error object is undefined or null)';
   }
   
   if (error instanceof Error && error.stack) {
@@ -67,7 +67,13 @@ export function getErrorStack(error: any): string | undefined {
     return error.stack;
   }
   
-  return undefined;
+  // Create a new error to capture the current stack trace
+  if (typeof error === 'string') {
+    const newError = new Error(error);
+    return newError.stack;
+  }
+  
+  return 'No stack trace available';
 }
 
 // Global error logger with enhanced visibility
@@ -122,20 +128,60 @@ export function SafeErrorView({
   title?: string,
   hint?: string
 }) {
+  const [showDetails, setShowDetails] = useState(false);
   const errorMessage = getErrorMessage(error);
+  const errorStack = getErrorStack(error);
+  
+  // Log the error immediately for visibility
+  useEffect(() => {
+    logError(error, 'SafeErrorView');
+  }, [error]);
   
   return (
     <View style={styles.errorContainer}>
       <Text style={styles.errorTitle}>{title}</Text>
       <Text style={styles.errorMessage}>{errorMessage}</Text>
       <Text style={styles.errorHint}>{hint}</Text>
+      
       <Button 
-        title="Show Error Details" 
-        onPress={() => {
-          // Log the error again for visibility
-          logError(error, 'ErrorView');
-        }} 
+        title={showDetails ? "Hide Error Details" : "Show Error Details"} 
+        onPress={() => setShowDetails(!showDetails)} 
       />
+      
+      {showDetails && (
+        <ScrollView style={styles.errorDetailsContainer}>
+          <View style={styles.errorDetailsBox}>
+            <Text style={styles.errorDetailsTitle}>Error Details:</Text>
+            <Text style={styles.errorDetailsText}>
+              Type: {error ? error.constructor?.name || typeof error : 'Unknown'}
+            </Text>
+            <Text style={styles.errorDetailsText}>
+              Message: {errorMessage}
+            </Text>
+            {errorStack && (
+              <>
+                <Text style={styles.errorDetailsSubtitle}>Stack Trace:</Text>
+                <Text style={styles.errorDetailsStack}>{errorStack}</Text>
+              </>
+            )}
+            {error && typeof error === 'object' && (
+              <>
+                <Text style={styles.errorDetailsSubtitle}>Properties:</Text>
+                {Object.entries(error)
+                  .filter(([key]) => key !== 'stack' && key !== 'message')
+                  .map(([key, value]) => (
+                    <Text key={key} style={styles.errorDetailsText}>
+                      {key}: {typeof value === 'object' 
+                        ? JSON.stringify(value, null, 2) 
+                        : String(value)}
+                    </Text>
+                  ))
+                }
+              </>
+            )}
+          </View>
+        </ScrollView>
+      )}
     </View>
   );
 }
@@ -145,13 +191,17 @@ export function StandardErrorView({ error }: { error?: any }) {
   // Log the error immediately for visibility
   useEffect(() => {
     if (error) {
+      console.log('[StandardErrorView] Received error:', error);
       logError(error, 'StandardErrorView');
+    } else {
+      console.warn('[StandardErrorView] Received undefined error');
+      logError(new Error('Undefined error in StandardErrorView'), 'StandardErrorView');
     }
   }, [error]);
   
   return (
     <SafeErrorView 
-      error={error} 
+      error={error || new Error('Unknown navigation error')} 
       title="Navigation Error" 
       hint="Please try again or restart the app" 
     />
@@ -225,6 +275,43 @@ const styles = StyleSheet.create({
     color: '#7f8c8d',
     marginBottom: 20,
   },
+  errorDetailsContainer: {
+    maxHeight: 300,
+    width: '100%',
+    marginTop: 20,
+  },
+  errorDetailsBox: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#e74c3c',
+    width: '100%',
+  },
+  errorDetailsTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    color: '#e74c3c',
+  },
+  errorDetailsText: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 8,
+  },
+  errorDetailsSubtitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginTop: 10,
+    marginBottom: 5,
+    color: '#e74c3c',
+  },
+  errorDetailsStack: {
+    fontSize: 12,
+    color: '#7f8c8d',
+    marginBottom: 10,
+    fontFamily: 'monospace',
+  },
   debugContainer: {
     flex: 1,
     padding: 10,
@@ -282,13 +369,17 @@ export function ErrorBoundaryFallback({ error }: { error: any }) {
   // Log the error immediately for visibility
   useEffect(() => {
     if (error) {
+      console.log('[ErrorBoundaryFallback] Received error:', error);
       logError(error, 'ErrorBoundaryFallback');
+    } else {
+      console.warn('[ErrorBoundaryFallback] Received undefined error');
+      logError(new Error('Undefined error in ErrorBoundaryFallback'), 'ErrorBoundaryFallback');
     }
   }, [error]);
   
   return (
     <SafeErrorView 
-      error={error} 
+      error={error || new Error('Unknown error in error boundary')} 
       title="Something went wrong" 
       hint="Try restarting the app" 
     />

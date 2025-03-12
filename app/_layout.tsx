@@ -34,28 +34,50 @@ export function ErrorBoundary({ children, error }: { children: React.ReactNode, 
 
   useEffect(() => {
     // Add global error handler using React Native's ErrorUtils
-    const errorHandler = (e: Error) => {
-      logError(e, 'ErrorBoundary');
-      setErrorState(e);
+    const errorHandler = (e: Error | any) => {
+      console.log('[ErrorBoundary] Caught error:', e);
+      
+      // Ensure we have a valid error object
+      const errorObj = e instanceof Error ? e : new Error(
+        typeof e === 'string' ? e : 'An unknown error occurred'
+      );
+      
+      // If the error doesn't have a message, add one
+      if (!errorObj.message) {
+        Object.defineProperty(errorObj, 'message', {
+          value: 'No error message provided',
+          enumerable: true,
+        });
+      }
+      
+      // Log the error with our enhanced logger
+      logError(errorObj, 'ErrorBoundary');
+      
+      // Update state to show error view
+      setErrorState(errorObj);
       setHasError(true);
     };
 
     // Set up the error handler
     if (global.ErrorUtils) {
+      console.log('[ErrorBoundary] Setting up global error handler');
       global.ErrorUtils.setGlobalHandler(errorHandler);
+    } else {
+      console.warn('[ErrorBoundary] global.ErrorUtils is not available');
     }
 
     return () => {
       // Reset to default handler on cleanup
       if (global.ErrorUtils) {
         global.ErrorUtils.setGlobalHandler((error: Error) => {
-          console.error(error);
+          console.error('[Default Error Handler]', error);
         });
       }
     };
   }, []);
 
-  if (hasError) {
+  if (hasError && errorState) {
+    console.log('[ErrorBoundary] Rendering error view for:', errorState.message);
     return <SafeErrorView error={errorState} />;
   }
 
@@ -107,9 +129,17 @@ function DebugButton() {
     <TouchableOpacity 
       style={styles.debugButton} 
       onPress={() => {
-        // Navigate to debug screen
-        // This will be handled by the router
-        window.location.href = '/debug';
+        // Navigate to debug screen using the router
+        try {
+          const { router } = require('expo-router');
+          router.push('/debug');
+        } catch (error) {
+          console.error('[DebugButton] Error navigating to debug screen:', error);
+          // Fallback to window.location if router fails
+          if (typeof window !== 'undefined' && window.location) {
+            window.location.href = '/debug';
+          }
+        }
       }}
     >
       <Text style={styles.debugButtonText}>Debug</Text>
