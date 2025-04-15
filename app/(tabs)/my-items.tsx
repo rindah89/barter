@@ -31,6 +31,8 @@ const { width } = Dimensions.get('window');
 interface MediaFile {
   url: string;
   type: 'image' | 'video';
+  tempId?: string;
+  uploadStatus?: 'uploading' | 'uploaded' | 'failed';
 }
 
 // Use the database types for our item
@@ -306,26 +308,90 @@ export default function MyItemsScreen() {
         return;
       }
       
-      console.log("Launching image picker...");
+      // Check how many more items can be added
+      const currentMediaCount = newItem.media_files.length;
+      const remainingSlots = 4 - currentMediaCount;
+      if (remainingSlots <= 0) {
+        showToast("You already have the maximum of 4 media items.", "warning");
+        return;
+      }
+
+      console.log(`Launching image picker, allowing up to ${remainingSlots} selections...`);
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.All,
-        allowsEditing: true,
-        aspect: [4, 3],
         quality: 0.8,
+        allowsMultipleSelection: true,
+        selectionLimit: remainingSlots, 
       });
 
       console.log("Image picker result:", JSON.stringify(result));
       
       if (!result.canceled) {
         if (result.assets && result.assets.length > 0) {
-          const asset = result.assets[0];
-          console.log("Selected asset:", JSON.stringify(asset));
+          console.log(`Selected ${result.assets.length} assets.`);
           
-          // Determine media type from the file extension
-          const fileExt = asset.uri.split('.').pop()?.toLowerCase();
-          const isVideo = ['mp4', 'mov', 'avi', '3gp', 'mkv'].includes(fileExt || '');
+          // Create temporary objects for optimistic UI update
+          const temporaryMediaFiles: MediaFile[] = result.assets.map((asset, index) => {
+            const tempId = `temp_${Date.now()}_${index}`;
+            const fileExt = asset.uri.split('.').pop()?.toLowerCase();
+            const isVideo = ['mp4', 'mov', 'avi', '3gp', 'mkv'].includes(fileExt || '');
+            return {
+              url: asset.uri, // Use local URI initially
+              type: isVideo ? 'video' : 'image',
+              tempId: tempId,
+              uploadStatus: 'uploading',
+            };
+          });
           
-          await uploadMedia(asset.uri, isVideo ? 'video' : 'image');
+          // Optimistically update the state
+          setNewItem(currentItem => ({
+            ...currentItem,
+            media_files: [...currentItem.media_files, ...temporaryMediaFiles],
+            // Optionally set main image optimistically if it's the first one
+            image_url: currentItem.image_url || temporaryMediaFiles[0].url, 
+            media_type: currentItem.media_type || temporaryMediaFiles[0].type
+          }));
+          
+          // Upload each selected asset in the background
+          temporaryMediaFiles.forEach(async (tempFile) => {
+            if (!tempFile.tempId) return; // Should not happen
+            
+            const uploadedResult = await uploadMedia(tempFile.url, tempFile.type, tempFile.tempId);
+            
+            // Update the specific item in the state based on tempId
+            setNewItem(currentItem => {
+              const updatedMediaFiles = currentItem.media_files.map(media => {
+                if (media.tempId === tempFile.tempId) {
+                  if (uploadedResult && uploadedResult.uploadStatus === 'uploaded') {
+                    // Upload success: update URL and status
+                    return { ...media, url: uploadedResult.url, uploadStatus: 'uploaded' };
+                  } else {
+                    // Upload failed: update status
+                    return { ...media, uploadStatus: 'failed' };
+                  }
+                }
+                return media;
+              });
+              
+              // Also update the main image_url if the first image just finished uploading
+              let newMainImage = currentItem.image_url;
+              let newMediaType = currentItem.media_type;
+              if (currentItem.media_files.length > 0 && currentItem.media_files[0].tempId === tempFile.tempId) {
+                 if (uploadedResult && uploadedResult.uploadStatus === 'uploaded') {
+                    newMainImage = uploadedResult.url;
+                    newMediaType = uploadedResult.type;
+                 }
+              }
+
+              return {
+                ...currentItem,
+                media_files: updatedMediaFiles,
+                image_url: newMainImage,
+                media_type: newMediaType
+              };
+            });
+          });
+          
         } else {
           console.log("No assets found in the result");
           showToast("No media was selected", "error");
@@ -339,10 +405,10 @@ export default function MyItemsScreen() {
     }
   };
 
-  const uploadMedia = async (uri: string, type: string) => {
+  const uploadMedia = async (uri: string, type: string, tempId?: string): Promise<MediaFile | null> => {
     if (!user) {
       showToast("You must be logged in to upload media", "error");
-      return;
+      return null;
     }
     
     try {
@@ -382,25 +448,17 @@ export default function MyItemsScreen() {
       
       console.log(`Public URL obtained: ${publicUrl}`);
       
-      // Add the new media file to the array
-      const updatedMediaFiles = [
-        ...newItem.media_files,
-        { url: publicUrl, type: isVideo ? 'video' : 'image' as 'video' | 'image' }
-      ];
-      
-      setNewItem({
-        ...newItem,
-        // Set the first media as the main image_url for backward compatibility
-        image_url: newItem.image_url || publicUrl,
-        media_type: newItem.image_url ? newItem.media_type : (isVideo ? 'video' : 'image'),
-        media_files: updatedMediaFiles
-      });
-      
-      console.log("New item state updated with media URL");
-      showToast(`${isVideo ? 'Video' : 'Photo'} uploaded successfully!`, "success");
+      // Return the uploaded media file details
+      return {
+        url: publicUrl,
+        type: isVideo ? 'video' : 'image',
+        tempId: tempId,
+        uploadStatus: 'uploaded'
+      };
     } catch (err: any) {
       console.error('Error uploading media:', err);
       showToast(`Failed to upload media: ${err.message || 'Unknown error'}`, "error");
+      return null;
     } finally {
       setImageUploading(false);
     }

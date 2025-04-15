@@ -39,8 +39,10 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
 
   useEffect(() => {
-    if (user) {
+    if (user && user.id) {
       fetchReviews();
+    } else {
+      console.log('[ProfileScreen] No user or user.id available, skipping review fetch');
     }
   }, [user]);
 
@@ -58,7 +60,10 @@ export default function ProfileScreen() {
   }, [profile, user]);
 
   const fetchReviews = async () => {
-    if (!user) return;
+    if (!user || !user.id) {
+      console.log('[ProfileScreen] Cannot fetch reviews: No user or user.id');
+      return;
+    }
     
     try {
       setReviewsLoading(true);
@@ -73,11 +78,14 @@ export default function ProfileScreen() {
         .order('created_at', { ascending: false })
         .limit(3);
       
-      if (error) throw error;
+      if (error) {
+        console.error('[ProfileScreen] Error fetching reviews:', error);
+        throw error;
+      }
       
-      setReviews(data);
+      setReviews(data || []);
     } catch (err) {
-      console.error('Error fetching reviews:', err);
+      console.error('[ProfileScreen] Error in fetchReviews:', err);
     } finally {
       setReviewsLoading(false);
     }

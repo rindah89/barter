@@ -425,6 +425,151 @@ export const chatService = {
       return { success: false };
     }
   },
+
+  /**
+   * Finds an existing chat room with the EXACT set of participants or creates a new one.
+   * Uses the `create_or_get_chat_room` PostgreSQL function via RPC.
+   * @param participantIds - An array of user UUIDs for the chat room.
+   * @returns {Promise<{ success: boolean; roomId?: string; error?: string }>} The chat room ID.
+   */
+  async getOrCreateChatRoom(participantIds: string[]): Promise<{ success: boolean; roomId?: string; error?: string }> {
+    if (!participantIds || participantIds.length < 2) {
+      return { success: false, error: 'At least two participants are required.' };
+    }
+    try {
+      // Ensure IDs are unique before calling RPC
+      const uniqueParticipantIds = [...new Set(participantIds)];
+      if (uniqueParticipantIds.length < 2) {
+        return { success: false, error: 'At least two unique participants are required.' };
+      }
+      
+      console.log('[getOrCreateChatRoom] Calling RPC with participants:', uniqueParticipantIds);
+      const { data, error } = await supabase.rpc('create_or_get_chat_room', {
+        p_participant_ids: uniqueParticipantIds,
+      });
+
+      if (error) throw error;
+
+      if (!data) {
+        throw new Error('Failed to get or create chat room ID from RPC.');
+      }
+
+      console.log('[getOrCreateChatRoom] RPC returned room ID:', data);
+      return { success: true, roomId: data };
+
+    } catch (error: any) {
+      console.error('[getOrCreateChatRoom] Error:', error);
+      return { success: false, error: error.message || 'Failed to get or create chat room' };
+    }
+  },
+
+  /**
+   * Fetches details for a specific chat room, including its participants.
+   * @param chatRoomId - The ID of the chat room.
+   * @returns {Promise<{ success: boolean; chatRoom?: ChatRoom; error?: string }>} The chat room details.
+   */
+  async getChatRoomDetails(chatRoomId: string): Promise<{ success: boolean; chatRoom?: ChatRoom; error?: string }> {
+    if (!chatRoomId) return { success: false, error: 'Chat Room ID is required.' };
+    try {
+      const { data: roomData, error: roomError } = await supabase
+        .from('chat_rooms')
+        .select('*, participants:chat_room_participants!inner(profile:profiles(*))') // Fetch participants via junction table
+        .eq('id', chatRoomId)
+        .single();
+
+      if (roomError) throw roomError;
+      if (!roomData) return { success: false, error: 'Chat room not found.' };
+
+      // Extract and structure participant profiles
+      const participants = roomData.participants?.map((p: any) => p.profile).filter(Boolean) || [];
+
+      const chatRoom: ChatRoom = {
+        ...roomData,
+        participants: participants,
+      };
+
+      return { success: true, chatRoom };
+    } catch (error: any) {
+      console.error('[getChatRoomDetails] Error:', error);
+      return { success: false, error: error.message || 'Failed to fetch chat room details' };
+    }
+  },
+
+  /**
+   * Gets all chat rooms for a specific user, including participants and the last message.
+   * @param userId - The ID of the user.
+   * @returns {Promise<{ success: boolean; chatRooms?: ChatRoom[]; error?: string }>} List of chat rooms.
+   */
+  async getUserChatRooms(userId: string): Promise<{ success: boolean; chatRooms?: ChatRoom[]; error?: string }> {
+    try {
+      // Fetch rooms where user is a participant, joining participant profiles
+      const { data: roomsData, error: roomsError } = await supabase
+        .from('chat_rooms')
+        .select(`
+          *,\
+          participants:chat_room_participants!inner(\
+            profile:profiles(*)\
+          )\
+        `)
+        .eq('participants.user_id', userId) // Filter rooms where the user is a participant
+        .order('last_message_at', { ascending: false, nullsFirst: false }); // Order by last message time
+
+      if (roomsError) throw roomsError;
+      if (!roomsData) return { success: true, chatRooms: [] };
+      
+      console.log(`[getUserChatRooms] Found ${roomsData.length} initial rooms for user ${userId}`);
+
+      // Fetch the latest message for each room (more efficient approach might be needed for many rooms)
+      const roomIds = roomsData.map(r => r.id);
+      if (roomIds.length === 0) return { success: true, chatRooms: [] };
+
+      const { data: latestMessages, error: messagesError } = await supabase
+        .from('messages')
+        .select(`
+          *,\
+          sender:profiles(*)\
+        `)
+        .in('chat_room_id', roomIds)
+        // Use a window function partition to get only the latest message per room
+        // This is more complex and might require an RPC call or view if performance is critical.
+        // Simple approach for now: fetch recent messages and map.
+        .order('created_at', { ascending: false })
+        .limit(roomIds.length * 5); // Fetch a few recent messages per room to find the latest
+
+      if (messagesError) throw messagesError;
+
+      // Create a map of the latest message for each room
+      const latestMessageMap = new Map<string, Message>();
+      if (latestMessages) {
+        for (const msg of latestMessages) {
+          if (!latestMessageMap.has(msg.chat_room_id)) {
+            latestMessageMap.set(msg.chat_room_id, msg as Message);
+          }
+        }
+      }
+      
+      // Map the data
+      const chatRooms: ChatRoom[] = roomsData.map((room) => {
+        const participants = room.participants?.map((p: any) => p.profile).filter(Boolean) || [];
+        return {
+          ...room,
+          participants: participants,
+          last_message: latestMessageMap.get(room.id),
+        };
+      }).sort((a, b) => { // Ensure final sort by last message time
+        const timeA = a.last_message ? new Date(a.last_message.created_at).getTime() : new Date(a.updated_at || a.created_at).getTime();
+        const timeB = b.last_message ? new Date(b.last_message.created_at).getTime() : new Date(b.updated_at || b.created_at).getTime();
+        return timeB - timeA;
+      });
+
+      console.log(`[getUserChatRooms] Returning ${chatRooms.length} processed rooms`);
+      return { success: true, chatRooms };
+
+    } catch (error: any) {
+      console.error('[getUserChatRooms] Error:', error);
+      return { success: false, error: error.message || 'Failed to fetch chat rooms' };
+    }
+  },
 };
 
 export default chatService; 

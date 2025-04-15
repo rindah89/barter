@@ -32,7 +32,7 @@ export default function RegisterScreen() {
   const [error, setError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const { signUp } = useAuth();
+  const { signIn } = useAuth();
   const [showDebugOption, setShowDebugOption] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   
@@ -98,8 +98,16 @@ export default function RegisterScreen() {
       // Sign up the user with Supabase Auth - with additional debugging
       console.log('Starting user registration with email:', email);
       
-      // Making direct API call to diagnose the issue
-      const { user, error: signUpError } = await signUp(email, password, { name });
+      // Making direct API call to Supabase
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { name }
+        }
+      });
+      
+      const user = data.user;
       
       console.log('Signup response (detailed):', JSON.stringify({ 
         user: user ? {
@@ -156,6 +164,11 @@ export default function RegisterScreen() {
         // Show a more user-friendly error message
         setError(`Profile creation failed: ${getErrorMessage(profileError)}`);
         return;
+      }
+
+      // If we have a session token, store it in AuthContext
+      if (data.session?.access_token) {
+        await signIn(data.session.access_token);
       }
 
       // Show success modal instead of Alert

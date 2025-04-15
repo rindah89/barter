@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, FlatList, Alert, Modal, TextInput, KeyboardAvoidingView, Platform, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Dimensions, FlatList, Alert, Modal, TextInput, KeyboardAvoidingView, Platform, Image, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
@@ -76,6 +76,7 @@ export default function ItemDetailsScreen() {
   const [includeCash, setIncludeCash] = useState<boolean>(false);
 
   const { showToast } = useToast();
+  const [isNavigatingToChat, setIsNavigatingToChat] = useState(false);
 
   useEffect(() => {
     const fetchItem = async () => {
@@ -344,52 +345,55 @@ export default function ItemDetailsScreen() {
 
   // Add a function to navigate to chat with the owner
   const navigateToChat = async () => {
-    if (!item?.profiles?.id) {
-      console.error('No profile ID available for chat');
-      showToast('Cannot start chat: No profile information available', 'error');
+    if (!item?.profiles?.id || !user) {
+      console.error('Missing user or owner profile ID for chat');
+      showToast('Cannot start chat: User or owner info missing.', 'error');
       return;
     }
-    
+    if (isNavigatingToChat) return; // Prevent double taps
+
+    setIsNavigatingToChat(true);
     try {
-      // Check if user is logged in
-      if (!user) {
-        showToast('You need to be logged in to chat', 'error');
-        return;
+      console.log(`[ItemDetails] Initiating chat between ${user.id} and ${item.profiles.id}`);
+      
+      // Call the updated service function to get or create the 1-on-1 chat room
+      const roomResult = await chatService.getOrCreateChatRoom([user.id, item.profiles.id]);
+
+      if (!roomResult.success || !roomResult.roomId) {
+          throw new Error(roomResult.error || 'Failed to initialize chat room.');
       }
       
-      console.log('Navigating to chat with:', {
-        currentUserId: user.id,
-        itemOwnerId: item.profiles.id,
-        ownerName: item.profiles.name,
-        ownerAvatar: item.profiles.avatar_url
-      });
+      const roomId = roomResult.roomId;
+      console.log(`[ItemDetails] Got roomId: ${roomId}, navigating...`);
       
-      // Create or get existing chat room
-      const result = await chatService.createOrGetChatRoom(user.id, item.profiles.id);
+      // Prepare navigation parameters - ONLY roomId is needed now
+      const chatParams = { roomId: roomId }; 
       
-      if (!result.success || !result.chatRoom) {
-        throw new Error(result.error || 'Failed to initialize chat room');
+      // Optionally pre-send the initial message about the item
+      // (Consider if this should be done here or on the chat screen)
+      if (item.name) {
+          const initialMessage = `Hi, I'm interested in your item: ${item.name}`;
+          const imgUrl = item.image_url ? getSupabaseFileUrl(item.image_url) : undefined;
+          // Determine the message type based on whether an image URL exists
+          const messageType: 'text' | 'image' = imgUrl ? 'image' : 'text';
+          
+          // Send silently in background, don't block navigation
+          chatService.sendMessage(roomId, user.id, initialMessage, imgUrl, messageType).catch(err => {
+              console.warn('[ItemDetails] Failed to send initial item message:', err);
+          });
       }
-      
-      console.log('Chat room created/retrieved:', result.chatRoom.id);
-      
-      // Prepare navigation parameters
-      const chatParams = {
-        userId: item.profiles.id,
-        userName: item.profiles.name || 'Unknown User',
-        userAvatar: item.profiles.avatar_url || '',
-      };
-      
-      console.log('Navigating to chat with params:', chatParams);
-      
-      // Navigate to chat screen
+
+      // Navigate to chat screen using roomId
       router.push({
         pathname: '/chat' as any,
-        params: chatParams,
+        params: chatParams, // Pass { roomId: ... }
       });
-    } catch (error) {
+
+    } catch (error: any) {
       console.error('Error navigating to chat:', error);
-      showToast('Failed to open chat. Please try again.', 'error');
+      showToast(error.message || 'Failed to open chat. Please try again.', 'error');
+    } finally {
+      setIsNavigatingToChat(false);
     }
   };
 
@@ -640,8 +644,13 @@ export default function ItemDetailsScreen() {
                         <TouchableOpacity 
                           style={styles.actionButton}
                           onPress={navigateToChat}
+                          disabled={isNavigatingToChat}
                         >
-                          <MessageCircle color="#FFFFFF" size={20} />
+                          {isNavigatingToChat ? (
+                            <ActivityIndicator size="small" color="#FFFFFF" />
+                          ) : (
+                            <MessageCircle color="#FFFFFF" size={20} />
+                          )}
                           <Text style={styles.actionButtonText}>Chat</Text>
                         </TouchableOpacity>
                         

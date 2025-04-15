@@ -31,6 +31,7 @@ import ChatButton from '../components/ChatButton';
 import { getSupabaseFileUrl } from '../../services/imageservice';
 import LoadingIndicator from '../../components/LoadingIndicator';
 import { useLoading } from '../../lib/LoadingContext';
+import SuggestedTrades from '../../components/SuggestedTrades';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const SWIPE_THRESHOLD = 120;
@@ -1242,41 +1243,11 @@ export default function DiscoverScreen() {
       );
     }
 
-    if (items.length === 0) {
-      return (
-        <View style={styles.emptyContainer}>
-          <View style={styles.lottieContainer}>
-            <LottieView
-              ref={lottieRef}
-              source={require('../../assets/home.json')}
-              autoPlay
-              loop
-              style={styles.lottieAnimation}
-            />
-          </View>
-          <Text style={styles.emptyTitle}>
-            {categoryFilter 
-              ? `No ${categoryFilter} Items Available` 
-              : 'No Items Available'}
-          </Text>
-          <Text style={styles.emptyText}>
-            {categoryFilter 
-              ? `There are no ${categoryFilter.toLowerCase()} items available for trading at the moment.` 
-              : 'There are no items available for trading at the moment.'}
-          </Text>
-          {categoryFilter && (
-            <TouchableOpacity 
-              style={styles.clearFilterButton} 
-              onPress={() => {
-                setCategoryFilter(null);
-              }}
-            >
-              <Text style={styles.clearFilterText}>Clear Filter</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      );
-    }
+    // Note: The original emptyContainer logic is complex and renders full-screen replacements.
+    // If items.length is 0, we might want to show SuggestedTrades above the empty message.
+    // For simplicity now, SuggestedTrades will only show if there ARE items.
+    // A more robust solution might involve a different structure if SuggestedTrades
+    // should *always* show above the main list area, even if empty.
 
     return (
       <FlatList
@@ -1296,6 +1267,8 @@ export default function DiscoverScreen() {
         }
         onEndReached={handleEndReached}
         onEndReachedThreshold={0.5}
+        // Add SuggestedTrades as the header for the list
+        ListHeaderComponent={<SuggestedTrades />}
         ListFooterComponent={
           loadingMore ? (
             <View style={styles.loadMoreIndicator}>
@@ -1312,6 +1285,44 @@ export default function DiscoverScreen() {
             </View>
           )
         }
+        // Render the empty component without the header if needed
+        // Or adjust the emptyContainer style to accommodate the header possibly
+        ListEmptyComponent={(
+            items.length === 0 && !loading && !refreshing ? (
+              <View style={styles.emptyContainer}>
+                {/* Reuse the existing empty state logic from the main component body */}
+                <View style={styles.lottieContainer}>
+                  <LottieView
+                    ref={lottieRef}
+                    source={require('../../assets/home.json')}
+                    autoPlay
+                    loop
+                    style={styles.lottieAnimation}
+                  />
+                </View>
+                <Text style={styles.emptyTitle}>
+                  {categoryFilter 
+                    ? `No ${categoryFilter} Items Available` 
+                    : 'No Items Available'}
+                </Text>
+                <Text style={styles.emptyText}>
+                  {categoryFilter 
+                    ? `There are no ${categoryFilter.toLowerCase()} items available for trading at the moment.` 
+                    : 'There are no items available for trading at the moment.'}
+                </Text>
+                {categoryFilter && (
+                  <TouchableOpacity 
+                    style={styles.clearFilterButton} 
+                    onPress={() => {
+                      setCategoryFilter(null);
+                    }}
+                  >
+                    <Text style={styles.clearFilterText}>Clear Filter</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ) : null
+          )}
       />
     );
   };
@@ -1497,65 +1508,69 @@ export default function DiscoverScreen() {
       </Modal>
 
       <SafeAreaView style={styles.contentContainer} edges={['bottom', 'left', 'right']}>
-        {viewMode === ViewMode.LIST ? (
-          renderListView()
-        ) : (
-          <>
-            <View style={styles.cardsContainer}>{renderCards()}</View>
-            <View style={styles.actionsContainer}>
-              <TouchableOpacity style={[styles.actionButton, styles.nopeButton]} onPress={swipeLeft}>
-                <X color="#FF3B30" size={30} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.actionButton, styles.filterButton]} onPress={() => setShowFilterModal(true)}>
-                <Filter color="#666666" size={30} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.actionButton, styles.likeButton]} onPress={swipeRight}>
-                <Heart color="#22C55E" size={30} fill="#22C55E" />
-              </TouchableOpacity>
-            </View>
-          </>
-        )}
-
-        <Modal visible={showFilterModal} transparent animationType="slide">
-          <View style={styles.modalContainer}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Filter by Category</Text>
-              <View style={styles.modalCategoriesGrid}>
-                {categories.map((category) => (
-                  <TouchableOpacity
-                    key={category}
-                    style={[
-                      styles.modalCategoryOption,
-                      categoryFilter === category ? styles.modalCategoryOptionActive : null,
-                      categoryFilter === null && category === 'All' ? styles.modalCategoryOptionActive : null,
-                    ]}
-                    onPress={() => {
-                      setCategoryFilter(category === 'All' ? null : category);
-                      setCurrentIndex(0);
-                      setShowFilterModal(false);
-                    }}
-                  >
-                    <Text 
-                      style={[
-                        styles.modalCategoryText,
-                        categoryFilter === category ? styles.modalCategoryTextActive : null,
-                        categoryFilter === null && category === 'All' ? styles.modalCategoryTextActive : null,
-                      ]}
-                    >
-                      {category}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+          {/* Conditional Rendering for List or Swipe View */}
+          {viewMode === ViewMode.LIST ? (
+            renderListView() // This now includes SuggestedTrades as a header
+          ) : (
+            <>
+              {/* SuggestedTrades could optionally be added here too if desired for swipe view */}
+              {/* <SuggestedTrades /> */} 
+              <View style={styles.cardsContainer}>{renderCards()}</View>
+              <View style={styles.actionsContainer}>
+                <TouchableOpacity style={[styles.actionButton, styles.nopeButton]} onPress={swipeLeft}>
+                  <X color="#FF3B30" size={30} />
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.actionButton, styles.filterButton]} onPress={() => setShowFilterModal(true)}>
+                  <Filter color="#666666" size={30} />
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.actionButton, styles.likeButton]} onPress={swipeRight}>
+                  <Heart color="#22C55E" size={30} fill="#22C55E" />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                style={styles.closeModalButton}
-                onPress={() => setShowFilterModal(false)}
-              >
-                <Text style={styles.closeModalButtonText}>Close</Text>
-              </TouchableOpacity>
+            </>
+          )}
+
+          {/* Filter Modal */}
+          <Modal visible={showFilterModal} transparent animationType="slide">
+            <View style={styles.modalContainer}>
+              <View style={styles.modalContent}>
+                <Text style={styles.modalTitle}>Filter by Category</Text>
+                <View style={styles.modalCategoriesGrid}>
+                  {categories.map((category) => (
+                    <TouchableOpacity
+                      key={category}
+                      style={[
+                        styles.modalCategoryOption,
+                        categoryFilter === category ? styles.modalCategoryOptionActive : null,
+                        categoryFilter === null && category === 'All' ? styles.modalCategoryOptionActive : null,
+                      ]}
+                      onPress={() => {
+                        setCategoryFilter(category === 'All' ? null : category);
+                        setCurrentIndex(0);
+                        setShowFilterModal(false);
+                      }}
+                    >
+                      <Text 
+                        style={[
+                          styles.modalCategoryText,
+                          categoryFilter === category ? styles.modalCategoryTextActive : null,
+                          categoryFilter === null && category === 'All' ? styles.modalCategoryTextActive : null,
+                        ]}
+                      >
+                        {category}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TouchableOpacity
+                  style={styles.closeModalButton}
+                  onPress={() => setShowFilterModal(false)}
+                >
+                  <Text style={styles.closeModalButtonText}>Close</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-        </Modal>
+          </Modal>
       </SafeAreaView>
     </View>
   );

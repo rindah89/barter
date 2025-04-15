@@ -17,24 +17,11 @@ import { ChevronLeft, Search, User, MessageCircle, X, Image as ImageIcon, Mic, V
 import { useRouter } from 'expo-router';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../lib/AuthContext';
-import { chatService } from '../services/chatService';
+import { chatService, ChatRoom as ChatRoomType } from '../services/chatService';
 import { Tables } from '../database.types';
 
 // Define types
 type Profile = Tables<'profiles'>;
-type ChatRoom = {
-  id: string;
-  last_message?: {
-    content: string | null;
-    created_at: string;
-    sender_name: string;
-  };
-  other_participant: {
-    id: string;
-    name: string | null;
-    avatar_url: string | null;
-  };
-};
 
 // Dummy data for demonstration
 const recentChats = [
@@ -51,6 +38,9 @@ export default function ChatSelectionScreen() {
   const [searchResults, setSearchResults] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [chatRooms, setChatRooms] = useState<ChatRoomType[]>([]);
+  const [isLoadingChats, setIsLoadingChats] = useState(true);
+  const [isInitiatingChat, setIsInitiatingChat] = useState<string | null>(null);
 
   // Function to search for users
   const searchUsers = async (query: string) => {
@@ -118,52 +108,41 @@ export default function ChatSelectionScreen() {
     setIsSearching(false);
   };
 
-  // Navigate to individual chat
-  const navigateToChat = async (userId: string, userName: string | null, userAvatar: string | null) => {
+  // Fetch User Chat Rooms
+  useEffect(() => {
+    if (user?.id) {
+      fetchChatRooms(user.id);
+    }
+  }, [user]);
+
+  const fetchChatRooms = async (userId: string) => {
+    setIsLoadingChats(true);
     try {
-      if (!user) {
-        Alert.alert('Error', 'You need to be logged in to chat');
-        return;
+      const result = await chatService.getUserChatRooms(userId);
+      if (result.success && result.chatRooms) {
+        setChatRooms(result.chatRooms);
+      } else {
+        console.error('Failed to fetch chat rooms:', result.error);
+        // Handle error display if needed
       }
-      
-      console.log('Navigating to chat with:', {
-        currentUserId: user.id,
-        partnerId: userId,
-        partnerName: userName,
-        partnerAvatar: userAvatar
-      });
-      
-      // Create or get existing chat room
-      const result = await chatService.createOrGetChatRoom(user.id, userId);
-      
-      if (!result.success || !result.chatRoom) {
-        throw new Error(result.error || 'Failed to initialize chat room');
-      }
-      
-      console.log('Chat room created/retrieved:', result.chatRoom.id);
-      
-      // Prepare navigation parameters
-      const chatParams = {
-        userId: userId,
-        userName: userName || 'Unknown User',
-        userAvatar: userAvatar || '',
-      };
-      
-      console.log('Navigating to chat with params:', chatParams);
-      
-      // Navigate to chat screen
-      router.push({
-        pathname: '/chat' as any,
-        params: chatParams,
-      });
     } catch (error) {
-      console.error('Error navigating to chat:', error);
-      Alert.alert('Error', 'Failed to open chat. Please try again.');
+      console.error('Error fetching chat rooms:', error);
+    } finally {
+      setIsLoadingChats(false);
     }
   };
 
+  // Navigate to individual chat
+  const navigateToChat = (roomId: string) => {
+    // Navigate using only the roomId
+    router.push({
+      pathname: '/chat' as any,
+      params: { roomId: roomId },
+    });
+  };
+
   // Function to render the last message preview
-  const renderLastMessagePreview = (chatRoom: ChatRoom) => {
+  const renderLastMessagePreview = (chatRoom: ChatRoomType) => {
     if (!chatRoom.last_message) {
       return <Text style={styles.lastMessage}>No messages yet</Text>;
     }
@@ -205,37 +184,96 @@ export default function ChatSelectionScreen() {
   };
 
   // Render recent chat item
-  const renderRecentChatItem = ({ item }: { item: ChatRoom }) => (
-    <TouchableOpacity
-      style={styles.chatItem}
-      onPress={() => navigateToChat(item.id, item.other_participant.name, item.other_participant.avatar_url)}
-    >
-      <Image
-        source={item.other_participant.avatar_url ? { uri: item.other_participant.avatar_url } : require('../assets/images/default-avatar.png')}
-        style={styles.avatar}
-      />
-      <View style={styles.chatInfo}>
-        <View style={styles.chatHeader}>
-          <Text style={styles.chatName}>{item.other_participant.name}</Text>
+  const renderRecentChatItem = ({ item }: { item: ChatRoomType }) => {
+    // Determine if it's a group chat
+    const isGroupChat = item.participants.length > 2;
+    // Find the other participant(s) excluding the current user
+    const otherParticipants = item.participants.filter(p => p.id !== user?.id);
+    
+    // Determine display name and avatar
+    let displayName = 'Unknown Chat';
+    let displayAvatar = null;
+    let avatarArray: (string | null)[] = [];
+
+    if (isGroupChat) {
+      displayName = otherParticipants.map(p => p.name?.split(' ')[0] || 'User').join(', '); // e.g., John, Jane
+      displayName = `You, ${displayName}`; // Add "You"
+      avatarArray = otherParticipants.slice(0, 3).map(p => p.avatar_url); // Max 3 avatars for display
+    } else if (otherParticipants.length === 1) {
+      displayName = otherParticipants[0].name || 'User';
+      displayAvatar = otherParticipants[0].avatar_url;
+    }
+
+    return (
+      <TouchableOpacity
+        style={styles.chatItem}
+        onPress={() => navigateToChat(item.id)} // Navigate with roomId
+      >
+        {isGroupChat ? (
+          <View style={styles.groupAvatarContainer}>
+            {/* Render multiple/group avatar */}
+            {avatarArray.map((avatarUrl, index) => (
+               <Image
+                 key={index}
+                 source={avatarUrl ? { uri: avatarUrl } : require('../assets/images/default-avatar.png')}
+                 style={[styles.groupAvatar, styles[`groupAvatar${index}`]]}
+              />
+            ))}
+             {item.participants.length > 3 && (
+                <View style={styles.groupAvatarMore}>
+                    <Text style={styles.groupAvatarMoreText}>+{item.participants.length - 3}</Text>
+                </View>
+            )}
+          </View>
+        ) : (
+          <Image
+            source={displayAvatar ? { uri: displayAvatar } : require('../assets/images/default-avatar.png')}
+            style={styles.avatar}
+          />
+        )}
+        <View style={styles.chatInfo}>
+          <Text style={styles.chatName} numberOfLines={1}>{displayName}</Text>
           {renderLastMessagePreview(item)}
         </View>
-        <View style={styles.chatFooter}>
-          <Text style={styles.timestamp}>{item.last_message?.created_at}</Text>
-          {item.last_message?.sender_name !== user?.name && item.last_message?.sender_name !== null && item.unread > 0 && (
-            <View style={styles.unreadBadge}>
-              <Text style={styles.unreadText}>{item.unread}</Text>
-            </View>
-          )}
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
+        {item.unread_count > 0 && (
+          <View style={styles.unreadBadge}>
+            <Text style={styles.unreadText}>{item.unread_count}</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
+
+  // --- NEW: Initiate chat from search result --- 
+  const handleInitiateChatFromSearch = async (selectedUser: Profile) => {
+    if (!user || !selectedUser || isInitiatingChat) return;
+
+    setIsInitiatingChat(selectedUser.id); // Show loading for this specific user
+    try {
+      console.log(`[ChatSelection] Initiating chat with user: ${selectedUser.id}`);
+      const result = await chatService.getOrCreateChatRoom([user.id, selectedUser.id]);
+
+      if (result.success && result.roomId) {
+        console.log(`[ChatSelection] Got roomId: ${result.roomId}, navigating...`);
+        navigateToChat(result.roomId);
+      } else {
+        console.error('[ChatSelection] Failed to get/create chat room:', result.error);
+        Alert.alert('Error', result.error || 'Could not start chat. Please try again.');
+      }
+    } catch (error: any) {
+      console.error('[ChatSelection] Error initiating chat:', error);
+      Alert.alert('Error', error.message || 'Could not start chat. Please try again.');
+    } finally {
+      setIsInitiatingChat(null); // Clear loading state
+    }
+  };
 
   // Render search result item
   const renderSearchResultItem = ({ item }: { item: Profile }) => (
     <TouchableOpacity
       style={styles.searchResultItem}
-      onPress={() => navigateToChat(item.id, item.name, item.avatar_url)}
+      onPress={() => handleInitiateChatFromSearch(item)} // Call the new handler
+      disabled={isInitiatingChat === item.id} // Disable button while loading this chat
     >
       {item.avatar_url ? (
         <Image
@@ -249,7 +287,11 @@ export default function ChatSelectionScreen() {
         </View>
       )}
       <Text style={styles.searchResultName}>{item.name}</Text>
-      <MessageCircle color="#22C55E" size={20} />
+      {isInitiatingChat === item.id ? (
+        <ActivityIndicator size="small" color="#22C55E" />
+      ) : (
+        <MessageCircle color="#22C55E" size={20} />
+      )}
     </TouchableOpacity>
   );
 
@@ -316,21 +358,22 @@ export default function ChatSelectionScreen() {
           </View>
         ) : (
           <View style={styles.recentChatsContainer}>
-            <Text style={styles.sectionTitle}>Recent Conversations</Text>
-            <FlatList
-              data={recentChats}
-              renderItem={renderRecentChatItem}
-              keyExtractor={(item) => item.id}
-              contentContainerStyle={styles.chatList}
-              ListEmptyComponent={
-                <View style={styles.emptyContainer}>
-                  <Text style={styles.emptyText}>No recent conversations</Text>
-                  <Text style={styles.emptySubtext}>
-                    Search for users to start chatting
-                  </Text>
-                </View>
-              }
-            />
+            <Text style={styles.sectionTitle}>Conversations</Text>
+            {isLoadingChats ? (
+              <ActivityIndicator size="large" color="#22C55E" style={{marginTop: 50}}/>
+            ) : (
+              <FlatList
+                data={chatRooms} // Use fetched chat rooms
+                renderItem={renderRecentChatItem}
+                keyExtractor={(item) => item.id}
+                contentContainerStyle={styles.chatList}
+                ListEmptyComponent={
+                  <View style={styles.emptyContainer}>
+                    <Text style={styles.emptyText}>No conversations yet</Text>
+                  </View>
+                }
+              />
+            )}
           </View>
         )}
       </SafeAreaView>
@@ -418,17 +461,14 @@ const styles = StyleSheet.create({
   },
   chatInfo: {
     flex: 1,
-  },
-  chatHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
+    justifyContent: 'center',
+    marginRight: 10, // Add margin to prevent overlap with badge
   },
   chatName: {
     fontSize: 16,
     fontWeight: '600',
     color: '#333333',
+    marginBottom: 4,
   },
   timestamp: {
     fontSize: 12,
@@ -442,8 +482,6 @@ const styles = StyleSheet.create({
   lastMessage: {
     fontSize: 14,
     color: '#666666',
-    flex: 1,
-    marginRight: 8,
   },
   unreadBadge: {
     backgroundColor: '#22C55E',
@@ -453,6 +491,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 6,
+    marginLeft: 'auto', // Push badge to the right
   },
   unreadText: {
     color: '#FFFFFF',
@@ -520,5 +559,58 @@ const styles = StyleSheet.create({
   mediaPreview: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  groupAvatarContainer: {
+    width: 56,
+    height: 56,
+    position: 'relative',
+    marginRight: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  groupAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    position: 'absolute',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
+  },
+  groupAvatar0: {
+    top: 0,
+    left: 0,
+    zIndex: 3,
+  },
+  groupAvatar1: {
+    bottom: 0,
+    left: 15,
+    zIndex: 2,
+  },
+  groupAvatar2: {
+    top: 10,
+    right: 0,
+    zIndex: 1,
+    width: 30, // Make 3rd slightly smaller maybe
+    height: 30,
+    borderRadius: 15,
+  },
+  groupAvatarMore: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#6c757d',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+    zIndex: 4,
+  },
+  groupAvatarMoreText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
 }); 

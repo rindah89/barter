@@ -22,16 +22,19 @@ export default function LoginScreen() {
     setError(null);
 
     try {
-      const { error } = await signIn(email, password);
-
-      if (error) {
-        setError(error.message);
-      } else {
-        router.replace('/(tabs)');
+      // Use the new signIn method that takes email and password directly
+      const result = await signIn(email, password);
+      
+      if (!result.success) {
+        setError(result.error?.message || 'Authentication failed');
+        return;
       }
-    } catch (err) {
-      setError('An unexpected error occurred');
-      console.error('Login error:', err);
+      
+      // Navigation will be handled by the AuthContext based on auth state
+      console.log('[LoginScreen] Login successful');
+    } catch (err: any) {
+      setError(err.message || 'An unexpected error occurred');
+      console.error('[LoginScreen] Login error:', err);
     } finally {
       setLoading(false);
     }
@@ -123,6 +126,13 @@ export default function LoginScreen() {
                 </TouchableOpacity>
               </Link>
             </View>
+
+            <TouchableOpacity 
+              style={styles.backButton}
+              onPress={() => router.push('/welcome')}
+            >
+              <Text style={styles.backButtonText}>Back to Welcome</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -247,5 +257,14 @@ const styles = StyleSheet.create({
     padding: 10,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  backButton: {
+    marginTop: 20,
+    alignItems: 'center',
+    padding: 10,
+  },
+  backButtonText: {
+    color: '#666666',
+    fontSize: 14,
   },
 });

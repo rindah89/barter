@@ -17,9 +17,9 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Send, ChevronLeft, Paperclip, X, Mic, StopCircle, Play, Pause } from 'lucide-react-native';
+import { Send, ChevronLeft, Paperclip, X, Mic, StopCircle, Play, Pause, Users } from 'lucide-react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { chatService, Message } from '@/services/chatService';
+import { chatService, Message, ChatRoom } from '@/services/chatService';
 import { useAuth } from '@/lib/AuthContext';
 import { format } from 'date-fns';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
@@ -35,6 +35,7 @@ import LoadingIndicator from '../components/LoadingIndicator';
 import { supabase } from '@/lib/supabase';
 import * as FileSystem from 'expo-file-system';
 import { presenceService } from '@/services/presenceService';
+import { getDefaultAvatar } from '@/lib/useDefaultAvatar';
 
 export default function ChatScreen() {
   const insets = useSafeAreaInsets();
@@ -42,19 +43,21 @@ export default function ChatScreen() {
   const params = useLocalSearchParams();
   const { user } = useAuth();
   
+  // Log received parameters immediately
+  console.log('[ChatScreen] Received params:', params);
+  
+  const { roomId } = useLocalSearchParams();
+  
   const [messageText, setMessageText] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageMap, setMessageMap] = useState<{[key: string]: boolean}>({});
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [chatRoomId, setChatRoomId] = useState<string | null>(null);
-  const [partnerProfile, setPartnerProfile] = useState<any>(null);
-  const [partnerOnline, setPartnerOnline] = useState<boolean>(false);
-  const [partnerLastSeen, setPartnerLastSeen] = useState<string | null>(null);
+  const [chatRoomDetails, setChatRoomDetails] = useState<ChatRoom | null>(null);
+  const [participants, setParticipants] = useState<Profile[]>([]);
   const flatListRef = useRef<FlatList>(null);
   const lottieRef = useRef<LottieView>(null);
   const subscriptionRef = useRef<any>(null);
-  const presenceSubscriptionRef = useRef<any>(null);
   
   // Media handling state
   const [showMediaModal, setShowMediaModal] = useState(false);
@@ -76,282 +79,162 @@ export default function ChatScreen() {
   const soundPlayersRef = useRef({});
   const recordingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
+  // State for initial item image attachment
+  const [initialAttachment, setInitialAttachment] = useState<any>(null);
+  
   // Get partner ID from params
   const partnerId = params.userId as string || params.partnerId as string;
   const userName = params.userName as string || params.partnerName as string;
   const userAvatar = params.userAvatar as string;
   const initialMessage = params.initialMessage as string;
   const tradeId = params.tradeId as string;
-  const offeredItemImageUrl = params.offeredItemImageUrl as string;
+  const passedItemImageUrl = params.offeredItemImageUrl as string;
   const requestedItemImageUrl = params.requestedItemImageUrl as string;
-  const offeredItemName = params.offeredItemName as string;
+  const passedItemName = params.offeredItemName as string;
   const requestedItemName = params.requestedItemName as string;
   
   // Track if initial message has been sent
   const [initialMessageSent, setInitialMessageSent] = useState(false);
   const initialMessageSentRef = useRef(false);
   
-  // Add a check for required parameters
+  // Set initial message based on item details if no other initial message is set
   useEffect(() => {
-    if (!partnerId) {
-      console.error('Missing required parameter: userId or partnerId');
-      Alert.alert(
-        'Error',
-        'Missing user information. Please try again.',
-        [{ text: 'Go Back', onPress: () => router.back() }]
-      );
+    // Read directly from params inside the effect
+    const currentItemName = params.itemName as string;
+    const currentItemImageUrl = params.itemImageUrl as string;
+    const currentInitialMessage = params.initialMessage as string;
+    
+    console.log('[ChatScreen Effect Check] Running. currentItemName:', currentItemName, 'currentInitialMessage:', currentInitialMessage, 'initialMessageSentRef:', initialMessageSentRef.current);
+    
+    // Use the correct parameters passed from item-details screen
+    if (currentItemName && !currentInitialMessage && !initialMessageSentRef.current) {
+      console.log('[ChatScreen Effect Logic] Condition met. Setting state.');
+      const itemMessage = `Hi, I'm interested in your item: ${currentItemName}`;
+      setMessageText(itemMessage); // Set the text
+      console.log('Pre-populating chat with item message. Image URL:', currentItemImageUrl);
+      
+      // Set the initial attachment if URL exists
+      if (currentItemImageUrl) {
+        const fileName = currentItemImageUrl.split('/').pop() || `item_image_${Date.now()}.jpg`;
+        setInitialAttachment({
+          uri: currentItemImageUrl,
+          type: 'image', 
+          name: fileName,
+        });
+        console.log('Setting initial attachment:', { uri: currentItemImageUrl, type: 'image', name: fileName });
+      } else {
+        setInitialAttachment(null); // Ensure it's null if no image URL
+      }
+      
+      initialMessageSentRef.current = true; // Mark that this initial setup has happened
     }
-  }, [partnerId, router]);
-
-  // Set initial message if provided
-  useEffect(() => {
-    // Use ref to ensure the effect only runs once
-    if (initialMessage && chatRoomId && !initialMessageSentRef.current && tradeId) {
-      // Mark as sent immediately to prevent duplicate sends
-      initialMessageSentRef.current = true;
-      setInitialMessageSent(true);
-      
-      // Set the message text first
-      setMessageText(initialMessage);
-      
-      // Then send it automatically after a short delay
-      const timer = setTimeout(async () => {
-        // Send the initial message without appending the trade ID to the visible text
-        // The trade ID will be included in metadata or as a separate field
-        setMessageText(initialMessage);
-        await handleSendMessageWithTradeId(tradeId);
-        
-        // Then send the item images if available
-        if (offeredItemImageUrl) {
-          await sendTradeItemImage(offeredItemImageUrl, `My offered item: ${offeredItemName || 'Item'}`);
-        }
-        
-        if (requestedItemImageUrl) {
-          await sendTradeItemImage(requestedItemImageUrl, `Your item: ${requestedItemName || 'Item'}`);
-        }
-      }, 500);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [initialMessage, chatRoomId, tradeId, offeredItemImageUrl, requestedItemImageUrl]);
+    // Change dependency to the params object itself
+  }, [params]); // Depend on the params object
 
   // Initialize chat room
   useEffect(() => {
-    console.log('Initialize Chat Effect - User:', user?.id, 'Partner ID:', partnerId);
-    
-    if (!user || !partnerId) {
-      console.log('Missing user or partnerId, not initializing chat');
-      setLoading(false);
-      return;
-    }
+    // Only proceed if roomId is available
+    if (roomId && user) {
+      console.log('Initialize Chat Effect - Starting with Room ID:', roomId, 'User ID:', user.id); 
+      
+      // Set loading true only when we are actually starting initialization
+      setLoading(true); 
 
-    // Set a basic partner profile from params while we load the real one
-    if (userName) {
-      setPartnerProfile({
-        id: partnerId,
-        username: userName,
-        avatar_url: userAvatar,
-      });
-    }
-
-    // Set a timeout to ensure loading state doesn't get stuck
-    const timeoutId = setTimeout(() => {
-      setLoading(false);
-    }, 5000); // 5 seconds timeout
-
-    const initializeChat = async () => {
-      try {
-        // Create or get existing chat room
-        const result = await chatService.createOrGetChatRoom(user.id, partnerId);
-        
-        if (result.success && result.chatRoom) {
-          setChatRoomId(result.chatRoom.id);
-          
-          // Find partner profile from participants
-          const partner = result.chatRoom.participants.find(p => p.id !== user.id);
-          if (partner) {
-            setPartnerProfile(partner);
+      // Define the async function inside the effect
+      const initializeChat = async (currentRoomId: string) => {
+        try {
+          // 1. Fetch chat room details (including participants)
+          console.log('[initializeChat] Fetching details for room:', currentRoomId);
+          const detailsResult = await chatService.getChatRoomDetails(currentRoomId);
+          if (!detailsResult.success || !detailsResult.chatRoom) {
+            throw new Error(detailsResult.error || 'Failed to load chat room details');
           }
+          console.log('[initializeChat] Fetched details:', detailsResult.chatRoom.participants.length, 'participants');
+          setChatRoomDetails(detailsResult.chatRoom);
+          setParticipants(detailsResult.chatRoom.participants || []);
+
+          // 2. Load initial messages
+          console.log('[initializeChat] Loading messages...');
+          await loadMessages(currentRoomId);
+          console.log('[initializeChat] Messages loaded.');
+
+          // 3. Set up real-time message subscription
+          console.log('[initializeChat] Setting up subscription...');
+          await setupSubscription(currentRoomId); // Make sure setupSubscription is awaited if it returns the channel
+          console.log('[initializeChat] Subscription setup.');
+
+          // 4. Mark messages as read (could be moved to focus event)
+          console.log('[initializeChat] Marking messages as read...');
+          await chatService.markMessagesAsRead(currentRoomId, user.id);
+          console.log('[initializeChat] Messages marked as read.');
           
-          // Load messages
-          await loadMessages(result.chatRoom.id);
-          
-          // Set up real-time subscription
-          setupSubscription(result.chatRoom.id);
-          
-          // Update current user's presence
-          await presenceService.updatePresence(user.id);
-          
-          // Check partner's online status
-          const presenceResult = await presenceService.isUserOnline(partnerId);
-          if (presenceResult.success) {
-            setPartnerOnline(presenceResult.isOnline);
-          }
-          
-          // Subscribe to partner's presence changes
-          setupPresenceSubscription(partnerId);
+        } catch (error: any) {
+          console.error('Error during chat initialization:', error); 
+          Alert.alert('Error', `Failed to initialize chat: ${error.message}`, [{ text: 'Go Back', onPress: () => router.back() }]);
+        } finally {
+          // Set loading false after initialization attempt (success or failure)
+          setLoading(false); 
         }
-      } catch (error) {
-        console.error('Error initializing chat:', error);
-      } finally {
-        setLoading(false);
-        clearTimeout(timeoutId);
-      }
-    };
+      };
 
-    initializeChat();
+      // Call the initialization function
+      initializeChat(roomId as string);
+
+    } else {
+       // Log if the effect runs but roomId or user is missing
+       console.log('Initialize Chat Effect - Skipped (Missing roomId or user)', { hasRoomId: !!roomId, hasUser: !!user });
+       // Do not set loading to false here, wait for roomId/user to trigger a valid run
+    }
     
-    // Set up a periodic presence update for the current user
-    const presenceInterval = setInterval(() => {
-      if (user?.id) {
-        presenceService.updatePresence(user.id).catch(err => {
-          console.error('Error updating presence:', err);
-        });
-      }
-    }, 30000); // Update every 30 seconds
-    
+    // Cleanup function (remains the same)
     return () => {
-      clearTimeout(timeoutId);
-      clearInterval(presenceInterval);
-      
-      // Mark user as offline when leaving
-      if (user?.id) {
-        presenceService.markOffline(user.id).catch(err => {
-          console.error('Error marking user offline:', err);
-        });
-      }
-      
-      // Clean up subscriptions on unmount - Fix the cleanup
-      if (subscriptionRef.current) {
-        // Check if it's a Promise or direct subscription
-        if (typeof subscriptionRef.current.then === 'function') {
-          // Handle Promise without await since we're in a non-async function
-          subscriptionRef.current.then(sub => {
-            if (sub && typeof sub.unsubscribe === 'function') {
-              sub.unsubscribe();
-            }
-          }).catch(err => {
-            console.error('Error unsubscribing from messages:', err);
-          });
-        } else if (subscriptionRef.current.unsubscribe) {
+      if (subscriptionRef.current && typeof subscriptionRef.current.unsubscribe === 'function') {
+        try {
           subscriptionRef.current.unsubscribe();
+          console.log(`[ChatScreen Cleanup] Unsubscribed from room: ${roomId}`);
+        } catch (e) {
+          console.error('[ChatScreen Cleanup] Error unsubscribing:', e);
         }
-      }
-      
-      if (presenceSubscriptionRef.current) {
-        // Fix: Don't use .then() as it's not a Promise
-        if (presenceSubscriptionRef.current.unsubscribe) {
-          presenceSubscriptionRef.current.unsubscribe();
-        }
+        subscriptionRef.current = null;
       }
     };
-  }, [user, partnerId, userName, userAvatar]);
+  }, [roomId, user]); // Depend on roomId and user
 
   // Set up real-time subscription
-  const setupSubscription = async (roomId) => {
+  const setupSubscription = async (currentRoomId: string) => {
     try {
-      // Clean up any existing subscription
       if (subscriptionRef.current) {
-        // Check if it's a Promise or direct subscription
-        if (typeof subscriptionRef.current.then === 'function') {
-          const sub = await subscriptionRef.current;
-          sub.unsubscribe();
-        } else if (subscriptionRef.current.unsubscribe) {
-          subscriptionRef.current.unsubscribe();
-        }
+        await subscriptionRef.current.unsubscribe();
+        subscriptionRef.current = null;
       }
-      
-      // Create new subscription
-      subscriptionRef.current = chatService.subscribeToMessages(roomId, (payload) => {
-        console.log('Received real-time update:', payload);
-        
-        // When a new message is received
+      subscriptionRef.current = await chatService.subscribeToMessages(currentRoomId, (payload) => {
+        console.log('Received real-time update:', payload.eventType, payload.new?.id);
         if (payload.eventType === 'INSERT') {
-          const newMessage = payload.new;
-          
-          // Log the message ID to help with debugging
-          console.log('Received message with ID:', newMessage.id);
-          
-          setMessages(prevMessages => {
-            // First check if this exact message ID already exists in our state
-            const exactDuplicate = prevMessages.some(msg => msg.id === newMessage.id);
-            if (exactDuplicate) {
-              console.log('Exact duplicate message found, skipping:', newMessage.id);
-              return prevMessages;
+          const newMessage = payload.new as Message;
+          if (newMessage && !messageMap[newMessage.id]) { // Check map for duplicates
+            console.log('Adding new message via subscription:', newMessage.id);
+            setMessageMap(prev => ({ ...prev, [newMessage.id]: true }));
+            // Prepend new message for inverted list
+            setMessages(prevMessages => [newMessage, ...prevMessages]); 
+            // Mark as read immediately if received while screen is focused
+            // TODO: Add focus check later
+            if (newMessage.sender_id !== user?.id) {
+              chatService.markMessagesAsRead(currentRoomId, user.id);
             }
-            
-            // Check if we have a temporary message that needs to be replaced
-            const tempMessageIndex = prevMessages.findIndex(msg => 
-              msg.is_sending && msg.content === newMessage.content && 
-              msg.sender_id === newMessage.sender_id &&
-              Math.abs(new Date(msg.created_at).getTime() - new Date(newMessage.created_at).getTime()) < 10000
-            );
-
-            if (tempMessageIndex !== -1) {
-              // Replace the temporary message with the real one
-              console.log('Replacing temp message with real message:', newMessage.id);
-              const updatedMessages = [...prevMessages];
-              updatedMessages[tempMessageIndex] = { ...newMessage, is_sending: false };
-              return updatedMessages;
-            }
-
-            // If no temporary message found and not in messageMap, add as new
-            if (!messageMap[newMessage.id]) {
-              console.log('Adding new message to state:', newMessage.id);
-              setMessageMap(prev => ({ ...prev, [newMessage.id]: true }));
-              return [newMessage, ...prevMessages];
-            }
-
-            return prevMessages;
-          });
+          }
         }
+        // TODO: Handle UPDATE/DELETE if needed (e.g., read status, deleted messages)
       });
     } catch (error) {
       console.error('Error setting up subscription:', error);
     }
   };
 
-  // Set up presence subscription
-  const setupPresenceSubscription = async (partnerId) => {
-    try {
-      // Clean up any existing subscription
-      if (presenceSubscriptionRef.current) {
-        // Fix: Don't use .then() as it's not a Promise
-        presenceSubscriptionRef.current.unsubscribe();
-      }
-      
-      // Create new subscription
-      presenceSubscriptionRef.current = presenceService.subscribeToUserPresence(partnerId, (payload) => {
-        console.log('Received presence update:', payload);
-        
-        if (payload.eventType === 'UPDATE') {
-          const presenceData = payload.new;
-          
-          // Check if user is online (is_online flag and last_seen within 2 minutes)
-          const isOnline = presenceData.is_online && 
-            new Date(presenceData.last_seen).getTime() > Date.now() - 2 * 60 * 1000;
-          
-          setPartnerOnline(isOnline);
-          setPartnerLastSeen(presenceData.last_seen);
-        }
-      });
-    } catch (error) {
-      console.error('Error setting up presence subscription:', error);
-    }
-  };
-
-  // Play Lottie animation when component mounts
-  useEffect(() => {
-    if (lottieRef.current && !loading && messages.length === 0) {
-      lottieRef.current.play();
-    }
-  }, [loading, messages.length]);
-
   // Load messages
-  const loadMessages = async (roomId: string) => {
+  const loadMessages = async (currentRoomId: string) => {
     try {
-      console.log('Loading messages for room ID:', roomId);
-      const result = await chatService.getChatMessages(roomId);
+      console.log('Loading messages for room ID:', currentRoomId);
+      const result = await chatService.getChatMessages(currentRoomId);
       console.log('Messages result:', result);
       
       if (!result.success || !result.messages) {
@@ -361,180 +244,116 @@ export default function ChatScreen() {
       console.log('Setting messages:', result.messages.length);
       
       // Deduplicate messages by ID before sorting
-      const uniqueMessages = result.messages.reduce((acc, message) => {
-        // Only add if we don't already have this message ID
-        if (!acc.some(m => m.id === message.id)) {
-          acc.push(message);
-        } else {
-          console.log('Duplicate message found during load:', message.id);
-        }
-        return acc;
-      }, []);
-      
-      console.log('Unique messages count:', uniqueMessages.length);
-      
-      // Sort messages in reverse chronological order for inverted FlatList
-      const sortedMessages = [...uniqueMessages].sort((a, b) => 
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      const uniqueMessages = result.messages.filter((msg, index, self) => 
+        index === self.findIndex((m) => m.id === msg.id)
       );
       
-      // Create a map of message IDs
-      const newMessageMap = sortedMessages.reduce((acc, msg) => {
-        acc[msg.id] = true;
-        return acc;
-      }, {} as {[key: string]: boolean});
-      
-      setMessageMap(newMessageMap);
-      setMessages(sortedMessages);
+      setMessageMap(uniqueMessages.reduce((acc, msg) => ({...acc, [msg.id]: true }), {}));
+      setMessages(uniqueMessages); // Already reversed by service now
     } catch (error) {
       console.error('Error loading messages:', error);
     }
   };
 
-  // Special function to handle sending messages with trade ID
-  const handleSendMessageWithTradeId = async (tradeId: string) => {
-    if (!messageText.trim() || sending || !chatRoomId) return;
+  // Regular function to handle sending messages (text or with media)
+  const handleSendMessage = async () => {
+    const currentRoomId = roomId as string;
+    if (!currentRoomId) return;
+    
+    const attachmentToSend = initialAttachment || selectedMedia;
+    const textContent = messageText.trim();
+
+    // Need either text or an attachment to send
+    if (!textContent && !attachmentToSend) return;
+    if (sending || !currentRoomId || !user) return;
     
     setSending(true);
+    const tempId = `temp-${Date.now()}`; // Unique ID for optimistic update
+    let uploadedMediaUrl: string | undefined = undefined;
+    let messageType: 'text' | 'image' | 'video' | 'file' | 'voice' = 'text';
+    let mediaLocalUri: string | undefined = undefined; // For optimistic preview
     
     try {
-      const tempId = `temp-${Date.now()}`;
-      // Use the message text as is, without appending the trade ID
-      const messageContent = messageText;
-      
-      // Create metadata to store the trade ID
-      const metadata = {
-        tradeId: tradeId,
-        isTradeMessage: true
-      };
-      
-      // Add optimistic message at the beginning for inverted FlatList
+      // 1. Handle Attachment (Upload if needed)
+      if (attachmentToSend) {
+        console.log('Attachment detected:', attachmentToSend);
+        mediaLocalUri = attachmentToSend.uri;
+        messageType = attachmentToSend.type === 'video' ? 'video' : 
+                      attachmentToSend.type === 'image' ? 'image' : 
+                      attachmentToSend.type === 'voice' ? 'voice' : 'file'; // Include voice
+
+        // Check if it's the initial attachment (already a URL) or needs upload
+        if (attachmentToSend === initialAttachment) {
+          console.log('Attachment is the initial item image, using its URL directly.');
+          uploadedMediaUrl = attachmentToSend.uri; // Already the final URL
+        } else {
+          // Needs upload (selectedMedia)
+          console.log('Attachment needs upload, calling uploadChatMedia...');
+          setMediaPreviewVisible(false);
+          const uploadResult = await chatService.uploadChatMedia(attachmentToSend, currentRoomId);
+          if (!uploadResult.success || !uploadResult.url) {
+            throw new Error(uploadResult.error || 'Failed to upload media');
+          }
+          uploadedMediaUrl = uploadResult.url;
+          console.log('Media uploaded successfully:', uploadedMediaUrl);
+        }
+      } else {
+        // No attachment, ensure message type is text
+        messageType = 'text';
+      }
+
+      // 2. Prepare Optimistic Message
+      const messageContentToSend = textContent || ''; // Send empty string if no text
+
       const tempMessage: Message = {
         id: tempId,
-        room_id: chatRoomId,
-        chat_room_id: chatRoomId,
-        sender_id: user?.id || '',
-        content: messageContent,
+        chat_room_id: currentRoomId,
+        sender_id: user.id,
+        content: messageContentToSend,
         created_at: new Date().toISOString(),
         is_sending: true,
         is_error: false,
-        message_type: 'text',
-        metadata: metadata
+        message_type: messageType,
+        media_uri: mediaLocalUri,
+        sender: user, // Optimistic sender profile
       };
-      
-      setMessages((prev) => [tempMessage, ...prev]);
-      setMessageText('');
-      
-      // Use the regular sendMessage function with metadata for the trade ID
-      console.log(`Sending message with trade ID in metadata: ${tradeId}`);
-      const result = await chatService.sendMessage(
-        chatRoomId,
-        user?.id || '',
-        messageContent,
-        undefined,
-        'text',
-        undefined,
-        undefined,
-        metadata
-      );
-      
-      if (!result.success) {
-        // Update the temp message to show error
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
-          )
-        );
-        console.error('Failed to send message with trade ID:', result.error);
-        Alert.alert('Error', 'Failed to send message. Please try again.');
-        return;
-      }
-      
-      if (result.message) {
-        // Replace temp message with actual message
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...result.message, is_sending: false } : msg
-          )
-        );
-      } else {
-        // If no message returned, just mark as sent
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === tempId ? { ...msg, is_sending: false } : msg
-          )
-        );
-      }
-    } catch (error) {
-      console.error('Error sending message with trade ID:', error);
-      Alert.alert('Error', 'Failed to send message. Please try again.');
-    } finally {
-      setSending(false);
-    }
-  };
 
-  // Regular function to handle sending messages without trade ID
-  const handleSendMessage = async () => {
-    if (!messageText.trim() || sending || !chatRoomId) return;
-    
-    setSending(true);
-    
-    try {
-      const tempId = `temp-${Date.now()}`;
-      const messageContent = messageText;
-      const currentTime = new Date().toISOString();
-      
-      // Add optimistic message
-      const tempMessage: Message = {
-        id: tempId,
-        room_id: chatRoomId,
-        chat_room_id: chatRoomId,
-        sender_id: user?.id || '',
-        content: messageContent,
-        created_at: currentTime,
-        is_sending: true,
-        is_error: false,
-        message_type: 'text',
-        sender: user
-      };
-      
-      // Add to messageMap to prevent duplication
+      // 3. Add Optimistic Message to State & Clear Inputs
       setMessageMap(prev => ({ ...prev, [tempId]: true }));
       setMessages(prev => [tempMessage, ...prev]);
-      setMessageText('');
-      
-      // Send message to server
+      setMessageText(''); // Clear text input
+      setInitialAttachment(null); // Clear initial attachment
+      setSelectedMedia(null); // Clear manually selected media
+
+      // 4. Send Message to Server
+      console.log(`Sending message: type=${messageType}, content='${messageContentToSend || null}', media_url=${uploadedMediaUrl}`);
       const result = await chatService.sendMessage(
-        chatRoomId,
-        user?.id || '',
-        messageContent,
-        undefined,
-        'text'
+        currentRoomId,
+        user.id,
+        messageContentToSend || null, // Pass null if content is empty
+        uploadedMediaUrl, // Use the final URL (either from upload or initialAttachment)
+        messageType
       );
-      
+
       if (!result.success) {
-        // Update the temp message to show error
-        setMessages(prev =>
-          prev.map(msg =>
-            msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
-          )
-        );
-        console.error('Failed to send message:', result.error);
-        return;
+        throw new Error(result.error || 'Failed to send message after upload');
       }
       
-      // The real message will be handled by the subscription
-    } catch (error) {
-      console.error('Error sending message:', error);
+      // Real message confirmation will be handled by the subscription
+      console.log('Message send call successful for tempId:', tempId);
       
+    } catch (error) {
+      console.error('Error in handleSendMessage:', error);
       // Update the temp message to show error
       setMessages(prev =>
         prev.map(msg =>
-          msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
+          msg.id === tempId ? { ...msg, is_sending: false, is_error: true, media_uri: mediaLocalUri } : msg
         )
       );
+      Alert.alert('Error', `Failed to send message: ${error.message || 'Please try again.'}`);
     } finally {
       setSending(false);
+      // setUploadingMedia(false); // Reset media upload indicator if used
     }
   };
 
@@ -610,13 +429,11 @@ export default function ChatScreen() {
 
   // Render message item - updated to handle different media types
   const renderMessageItem = ({ item }: { item: Message }) => {
-    // Add null check for item and required properties
-    if (!item || !item.id || !item.sender_id) {
-      console.log('Invalid message item:', item);
-      return null;
-    }
+    if (!item || !item.id || !item.sender_id) return null;
     
     const isMyMessage = item.sender_id === user?.id;
+    // Get sender profile from the message object (joined in service)
+    const senderProfile = item.sender;
     
     return (
       <View
@@ -626,10 +443,10 @@ export default function ChatScreen() {
           isMyMessage ? styles.myMessageWrapper : styles.partnerMessageWrapper,
         ]}
       >
-        {!isMyMessage && partnerProfile && (
+        {!isMyMessage && senderProfile && (
           <Image
             source={{ 
-              uri: partnerProfile.avatar_url || 'https://via.placeholder.com/40' 
+              uri: getSupabaseFileUrl(senderProfile.avatar_url) ?? getDefaultAvatar()
             }}
             style={styles.avatar}
           />
@@ -643,6 +460,11 @@ export default function ChatScreen() {
             item.is_error && { borderWidth: 1, borderColor: '#FF3B30' },
           ]}
         >
+          {/* Display sender name for group chats on partner messages */}
+          {!isMyMessage && senderProfile && participants.length > 2 && (
+            <Text style={styles.senderName}>{senderProfile.name || 'User'}</Text>
+          )}
+          
           {/* Render different types of media */}
           {item.message_type === 'image' && item.media_uri && (
             <View style={styles.imageWrapper}>
@@ -803,6 +625,9 @@ export default function ChatScreen() {
   // Handle media selection from camera
   const handleCameraSelect = async () => {
     try {
+      // Clear any initial attachment first
+      setInitialAttachment(null); 
+      
       const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
       
       if (!permissionResult.granted) {
@@ -834,6 +659,9 @@ export default function ChatScreen() {
   // Handle media selection from gallery
   const handleGallerySelect = async () => {
     try {
+      // Clear any initial attachment first
+      setInitialAttachment(null); 
+      
       const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
       
       if (!permissionResult.granted) {
@@ -865,6 +693,9 @@ export default function ChatScreen() {
   // Handle document selection
   const handleDocumentSelect = async () => {
     try {
+      // Clear any initial attachment first
+      setInitialAttachment(null); 
+      
       const result = await DocumentPicker.getDocumentAsync({
         type: '*/*',
         copyToCacheDirectory: true,
@@ -887,208 +718,27 @@ export default function ChatScreen() {
     }
   };
   
-  // Handle sending media message
-  const handleSendMedia = async () => {
-    if (!selectedMedia || !chatRoomId || !user) {
-      return;
-    }
-    
-    // Prevent multiple submissions
-    if (uploadingMedia) {
-      return;
-    }
-    
-    setUploadingMedia(true);
-    
-    try {
-      const tempId = `temp-${Date.now()}`;
-      let messageType = 'text';
-      
-      // Determine message type based on media type
-      if (selectedMedia.type === 'image') {
-        messageType = 'image';
-      } else if (selectedMedia.type === 'video') {
-        messageType = 'video';
-      } else {
-        messageType = 'file';
-      }
-      
-      // Use messageText as caption if provided, otherwise use a descriptive text based on media type
-      let mediaContent = messageText.trim();
-      if (!mediaContent) {
-        if (messageType === 'image') {
-          mediaContent = '📷 Image';
-        } else if (messageType === 'video') {
-          mediaContent = '🎥 Video';
-        } else {
-          mediaContent = '📎 File';
-        }
-      }
-      
-      // Create a safe sender object with only necessary properties
-      const safeSender = {
-        id: user.id,
-        username: user.username,
-        full_name: user.full_name,
-        avatar_url: user.avatar_url
-      };
-      
-      // Validate the media URI before proceeding
-      if (!selectedMedia.uri || typeof selectedMedia.uri !== 'string') {
-        throw new Error('Invalid media URI');
-      }
-      
-      // Add optimistic message
-      const tempMessage: Message = {
-        id: tempId,
-        room_id: chatRoomId,
-        chat_room_id: chatRoomId,
-        sender_id: user?.id || '',
-        content: mediaContent,
-        created_at: new Date().toISOString(),
-        is_sending: true,
-        is_error: false,
-        message_type: messageType,
-        media_uri: selectedMedia.uri,
-        sender: safeSender
-      };
-      
-      // Add to messageMap to prevent duplication
-      setMessageMap(prev => ({ ...prev, [tempId]: true }));
-      
-      // Update messages state safely
-      setMessages(prevMessages => {
-        return [tempMessage, ...prevMessages];
-      });
-      
-      // Clear the input field
-      setMessageText('');
-      
-      // Close the media preview first to avoid UI issues
-      setMediaPreviewVisible(false);
-      
-      // Upload media to storage
-      let folderName = 'chatFiles';
-      if (messageType === 'image') folderName = 'chatImages';
-      if (messageType === 'video') folderName = 'chatVideos';
-      
-      console.log('Uploading media:', selectedMedia.uri);
-      const uploadResult = await chatService.uploadChatMedia(selectedMedia, chatRoomId);
-      
-      if (!uploadResult.success || !uploadResult.url) {
-        throw new Error('Failed to upload media');
-      }
-      
-      console.log('Media uploaded successfully:', uploadResult.url);
-      
-      // Send message with media URL
-      const result = await chatService.sendMessage(
-        chatRoomId,
-        user.id,
-        mediaContent, // Use the caption if provided, otherwise null
-        uploadResult.url,
-        messageType as 'text' | 'image' | 'video' | 'voice' | 'gif' | 'emoji'
-      );
-      
-      // The real message will be handled by the subscription
-      
-      // Clear selected media after successful upload
-      setSelectedMedia(null);
-    } catch (error) {
-      console.error('Error sending media:', error);
-      
-      // Update the temp message to show error
-      if (tempId) {
-        setMessages(prevMessages => {
-          return prevMessages.map(msg => {
-            if (msg.id === tempId) {
-              return { ...msg, is_sending: false, is_error: true };
-            }
-            return msg;
-          });
-        });
-      }
-      
-      Alert.alert('Error', 'Failed to send media. Please try again.');
-    } finally {
-      setUploadingMedia(false);
-    }
-  };
-
-  // Function to send trade item images
-  const sendTradeItemImage = async (imageUrl: string, caption: string) => {
-    if (!imageUrl || !chatRoomId || !user) return;
-    
-    try {
-      const tempId = `temp-${Date.now()}`;
-      
-      // Create a safe sender object with only necessary properties
-      const safeSender = {
-        id: user.id,
-        username: user.username,
-        full_name: user.full_name,
-        avatar_url: user.avatar_url
-      };
-      
-      // Add optimistic message
-      const tempMessage: Message = {
-        id: tempId,
-        room_id: chatRoomId,
-        chat_room_id: chatRoomId,
-        sender_id: user?.id || '',
-        content: caption,
-        created_at: new Date().toISOString(),
-        is_sending: true,
-        is_error: false,
-        message_type: 'image',
-        media_uri: imageUrl,
-        sender: safeSender
-      };
-      
-      // Add to messageMap to prevent duplication
-      setMessageMap(prev => ({ ...prev, [tempId]: true }));
-      
-      // Update messages state safely
-      setMessages(prevMessages => {
-        return [tempMessage, ...prevMessages];
-      });
-      
-      // Send message with the image URL
-      const result = await chatService.sendMessage(
-        chatRoomId,
-        user.id,
-        caption,
-        imageUrl,
-        'image'
-      );
-      
-      if (!result.success) {
-        // Update the temp message to show error
-        setMessages(prev =>
-          prev.map(msg =>
-            msg.id === tempId ? { ...msg, is_sending: false, is_error: true } : msg
-          )
-        );
-        console.error('Failed to send trade item image:', result.error);
-      }
-    } catch (error) {
-      console.error('Error sending trade item image:', error);
-    }
+  // Helper to generate group chat title
+  const getGroupChatTitle = () => {
+    if (!chatRoomDetails) return 'Chat';
+    const otherParticipants = participants.filter(p => p.id !== user?.id);
+    if (otherParticipants.length === 0) return 'Chat';
+    if (otherParticipants.length === 1) return otherParticipants[0].name || 'Chat';
+    // For groups, list first 2-3 names
+    return otherParticipants.slice(0, 2).map(p => p.name?.split(' ')[0] || 'User').join(', ') + 
+           (otherParticipants.length > 2 ? ' & others' : '');
   };
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
       <ExpoStatusBar style="light" translucent backgroundColor="transparent" />
       
-      {/* Header with gradient that extends to status bar */}
+      {/* Header - Updated for Groups */}
       <LinearGradient
         colors={['#22C55E', '#16A34A']}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 0 }}
-        style={[
-          styles.headerGradient,
-          { paddingTop: insets.top }
-        ]}
+        style={[styles.headerGradient, { paddingTop: insets.top }]}
       >
         <View style={styles.header}>
           <TouchableOpacity
@@ -1099,31 +749,26 @@ export default function ChatScreen() {
           </TouchableOpacity>
           
           <View style={styles.headerContent}>
-            {partnerProfile ? (
+            {chatRoomDetails ? (
               <>
-                <Text style={styles.headerTitle}>
-                  {partnerProfile.full_name || partnerProfile.username || userName || 'User'}
+                <Text style={styles.headerTitle} numberOfLines={1}>
+                  {getGroupChatTitle()}
                 </Text>
-                <View style={styles.onlineStatusContainer}>
-                  {partnerOnline ? (
-                    <>
-                      <View style={styles.onlineIndicator} />
-                      <Text style={styles.headerSubtitle}>Online</Text>
-                    </>
-                  ) : (
-                    <Text style={styles.headerSubtitle}>
-                      {partnerLastSeen ? `Last seen ${formatLastSeen(partnerLastSeen)}` : 'Offline'}
-                    </Text>
-                  )}
-                </View>
+                <Text style={styles.headerSubtitle}>
+                  {participants.length} participants
+                </Text>
               </>
             ) : (
-              <>
-                <ActivityIndicator size="small" color="#FFFFFF" />
-                <Text style={styles.headerTitle}>Loading...</Text>
-              </>
+              <ActivityIndicator size="small" color="#FFFFFF" />
             )}
           </View>
+          
+          {/* Optional: Add group info button */}
+          {participants.length > 2 && (
+            <TouchableOpacity style={styles.groupInfoButton}>
+              <Users size={22} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
         </View>
       </LinearGradient>
       
@@ -1205,8 +850,28 @@ export default function ChatScreen() {
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={insets.bottom + 10}
-        style={styles.inputContainer}
+        style={styles.inputContainerWrapper}
       >
+        {/* Initial Attachment Preview Area */} 
+        {initialAttachment && (
+          <View style={styles.initialAttachmentPreviewContainer}>
+            <Image 
+              source={{ uri: initialAttachment.uri }}
+              style={styles.initialAttachmentThumbnail}
+              contentFit="cover"
+            />
+            <Text style={styles.initialAttachmentText} numberOfLines={1}>
+              Attached: {initialAttachment.name}
+            </Text>
+            <TouchableOpacity 
+              style={styles.removeAttachmentButton}
+              onPress={() => setInitialAttachment(null)}
+            >
+              <X size={16} color="#666" />
+            </TouchableOpacity>
+          </View>
+        )}
+        
         {!isRecording ? (
           <View style={styles.inputRow}>
             <TouchableOpacity
@@ -1231,11 +896,7 @@ export default function ChatScreen() {
                   styles.sendButton,
                   sending && styles.sendButtonDisabled,
                 ]}
-                onPress={() => {
-                  // Always use the regular handleSendMessage for user-typed messages
-                  // The initial message with tradeId is handled by the useEffect
-                  handleSendMessage();
-                }}
+                onPress={handleSendMessage}
                 disabled={sending}
               >
                 {sending ? (
@@ -1412,7 +1073,7 @@ export default function ChatScreen() {
                 styles.mediaPreviewSendButton,
                 uploadingMedia && styles.mediaPreviewSendButtonDisabled,
               ]}
-              onPress={handleSendMedia}
+              onPress={handleSendMessage}
               disabled={uploadingMedia}
             >
               {uploadingMedia ? (
@@ -1457,14 +1118,16 @@ const styles = StyleSheet.create({
   headerContent: {
     flex: 1,
     marginLeft: 12,
+    marginRight: 5, // Add margin to prevent overlap with info button
+    alignItems: 'flex-start', // Align title/subtitle left
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 17, // Adjust size if needed
     fontWeight: 'bold',
     color: '#FFFFFF',
   },
   headerSubtitle: {
-    fontSize: 14,
+    fontSize: 13, // Adjust size
     color: 'rgba(255, 255, 255, 0.8)',
   },
   messagesContainer: {
@@ -1473,9 +1136,15 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 8,
   },
-  inputContainer: {
+  inputContainerWrapper: {
     width: '100%',
     backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#EEEEEE',
+  },
+  inputContainer: {
+    // width: '100%', 
+    // backgroundColor: '#FFFFFF',
   },
   inputRow: {
     flexDirection: 'row',
@@ -1529,12 +1198,15 @@ const styles = StyleSheet.create({
   partnerMessageWrapper: {
     justifyContent: 'flex-start',
     alignSelf: 'flex-start',
+    flexDirection: 'row', // Keep avatar and bubble together
+    alignItems: 'flex-end', // Align avatar bottom with bubble
   },
   avatar: {
     width: 30,
     height: 30,
     borderRadius: 15,
     marginRight: 8,
+    // marginBottom: 4, // Align with bottom of text bubble potentially
   },
   messageContainer: {
     maxWidth: '80%',
@@ -1956,5 +1628,39 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: '#4ADE80',
     marginRight: 6,
+  },
+  initialAttachmentPreviewContainer: { 
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#f0f0f0', // Light background for the preview area
+  },
+  initialAttachmentThumbnail: {
+    width: 40,
+    height: 40,
+    borderRadius: 4,
+    marginRight: 10,
+  },
+  initialAttachmentText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#555',
+  },
+  removeAttachmentButton: {
+    padding: 6,
+    marginLeft: 8,
+  },
+  groupInfoButton: {
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  senderName: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#6c757d', // Or use a specific color
+    marginBottom: 3,
+    marginLeft: 2, // Align with text content padding
   },
 }); 

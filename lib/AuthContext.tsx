@@ -1,327 +1,371 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
-import { Session, User } from '@supabase/supabase-js';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { useSegments, useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
+import { Platform } from 'react-native';
 import { supabase } from './supabase';
-import { router, useRootNavigationState } from 'expo-router';
-import { ActivityIndicator, View, StyleSheet, AppState } from 'react-native';
-import { presenceService } from '@/services/presenceService';
+import { User } from '@supabase/supabase-js';
+import {
+  getCurrentSession,
+  signInWithEmail,
+  signUpWithEmail,
+  refreshSession,
+  signOut as expoSignOut,
+  getDeepLinkRedirectUri
+} from './ExpoAuthSession';
 
+// Update the auth context type to focus on email auth
 interface AuthContextType {
-  session: Session | null;
-  user: User | null;
-  loading: boolean;
-  signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signUp: (email: string, password: string, data?: object) => Promise<{ user: User | null; error: Error | null }>;
+  signIn: (email: string, password: string) => Promise<{ success: boolean; error?: Error }>;
+  signUp: (email: string, password: string, metadata?: any) => Promise<{ success: boolean; error?: Error; confirmationRequired?: boolean }>;
   signOut: () => Promise<void>;
-  resetPassword: (email: string) => Promise<{ error: Error | null }>;
+  refreshToken: () => Promise<boolean>;
+  session: string | null;
+  isLoading: boolean;
+  user: User | null;
 }
 
-// Create the auth context with a default undefined value
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+// Create the context with default values
+const AuthContext = createContext<AuthContextType>({
+  signIn: async () => ({ success: false }),
+  signUp: async () => ({ success: false }),
+  signOut: async () => {},
+  refreshToken: async () => false,
+  session: null,
+  isLoading: true,
+  user: null,
+});
 
-// Provider component that wraps the app and provides auth context
-export function AuthProvider({ children }: { children: ReactNode }) {
-  console.log('[AuthContext] AuthProvider rendering');
-  const [session, setSession] = useState<Session | null>(null);
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [isSigningOut, setIsSigningOut] = useState(false);
-  const rootNavigationState = useRootNavigationState();
-  const appState = useRef(AppState.currentState);
-  const presenceIntervalRef = useRef<NodeJS.Timeout | null>(null);
+// Storage key for the session token
+const SESSION_KEY = 'auth-session';
 
-  // Initialize the auth state on component mount
-  useEffect(() => {
-    console.log('[AuthContext] AuthProvider useEffect running');
-    
-    // Get the current session
-    const initializeAuth = async () => {
-      console.log('[AuthContext] Initializing auth');
-      try {
-        const { data } = await supabase.auth.getSession();
-        console.log('[AuthContext] Got session:', { hasSession: !!data.session });
-        setSession(data.session);
-        setUser(data.session?.user ?? null);
-        
-        // Initialize presence if user is logged in
-        if (data.session?.user) {
-          await initializePresence(data.session.user.id);
-        }
-      } catch (error) {
-        console.error('[AuthContext] Error loading auth session:', error);
-      } finally {
-        setLoading(false);
-        console.log('[AuthContext] Auth initialization complete');
+// Helper function to store the session token securely
+async function setStorageItemAsync(key: string, value: string | null) {
+  if (Platform.OS === 'web') {
+    try {
+      if (value === null) {
+        localStorage.removeItem(key);
+      } else {
+        localStorage.setItem(key, value);
       }
-    };
+    } catch (e) {
+      console.error('[AuthContext] Local storage is unavailable:', e);
+    }
+  } else {
+    if (value == null) {
+      await SecureStore.deleteItemAsync(key);
+    } else {
+      await SecureStore.setItemAsync(key, value);
+    }
+  }
+}
 
-    initializeAuth();
+// Helper function to retrieve the session token
+async function getStorageItemAsync(key: string): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    try {
+      return localStorage.getItem(key);
+    } catch (e) {
+      console.error('[AuthContext] Local storage is unavailable:', e);
+      return null;
+    }
+  } else {
+    return SecureStore.getItemAsync(key);
+  }
+}
 
-    // Listen for auth state changes
-    console.log('[AuthContext] Setting up auth state change listener');
+// Provider component that wraps the app and makes auth available
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [session, setSession] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [user, setUser] = useState<User | null>(null);
+  const segments = useSegments();
+  const router = useRouter();
+  const [isRouterReady, setIsRouterReady] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+
+  // Check if router is ready
+  useEffect(() => {
+    if (router && typeof router.replace === 'function') {
+      setIsRouterReady(true);
+    }
+  }, [router]);
+
+  // Setup Supabase auth listener for real-time state management
+  useEffect(() => {
+    console.log('[AuthContext] Setting up auth listener');
+    
+    // Subscribe to auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, newSession) => {
-        console.log('[AuthContext] Auth state changed:', { event: _event, hasSession: !!newSession });
-        setSession(newSession);
-        setUser(newSession?.user ?? null);
+      async (event, newSession) => {
+        console.log(`[AuthContext] Auth state changed: ${event}`);
         
-        // Handle presence based on auth state change
-        if (_event === 'SIGNED_IN' && newSession?.user) {
-          await initializePresence(newSession.user.id);
-        } else if (_event === 'SIGNED_OUT') {
-          cleanupPresence();
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          if (newSession) {
+            console.log('[AuthContext] Got new session, saving token');
+            await setStorageItemAsync(SESSION_KEY, newSession.access_token);
+            setSession(newSession.access_token);
+            
+            // Also update the user object
+            setUser(newSession.user || null);
+          }
+        } else if (event === 'SIGNED_OUT') {
+          console.log('[AuthContext] User signed out, clearing session');
+          await setStorageItemAsync(SESSION_KEY, null);
+          setSession(null);
+          setUser(null);
+        } else if (event === 'USER_UPDATED') {
+          console.log('[AuthContext] User data updated, refreshing');
+          if (newSession) {
+            setUser(newSession.user || null);
+          }
         }
       }
     );
     
-    // Set up AppState listener for background/foreground transitions
-    const subscription2 = AppState.addEventListener('change', nextAppState => {
-      if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
-        // App has come to the foreground
-        console.log('[AuthContext] App has come to the foreground');
-        if (user) {
-          presenceService.updatePresence(user.id).catch(err => {
-            console.error('[AuthContext] Error updating presence on foreground:', err);
-          });
+    // Load initial session on mount
+    const loadInitialSession = async () => {
+      try {
+        console.log('[AuthContext] Loading initial session');
+        setIsLoading(true);
+        
+        // Use the ExpoAuthSession helper to get the current session
+        const supabaseSession = await getCurrentSession();
+        
+        if (supabaseSession) {
+          console.log('[AuthContext] Found active Supabase session');
+          // Save token to storage and state
+          await setStorageItemAsync(SESSION_KEY, supabaseSession.access_token);
+          setSession(supabaseSession.access_token);
+          setUser(supabaseSession.user || null);
+        } else {
+          // No active Supabase session, try to get from storage
+          console.log('[AuthContext] No active Supabase session, checking storage');
+          const storedToken = await getStorageItemAsync(SESSION_KEY);
+          
+          if (storedToken) {
+            console.log('[AuthContext] Found token in storage, trying to restore session');
+            // Try to restore the session
+            const { data: { user: userData }, error: userError } = 
+              await supabase.auth.getUser(storedToken);
+            
+            if (userError) {
+              console.error('[AuthContext] Error restoring session:', userError);
+              // Clear invalid token
+              await setStorageItemAsync(SESSION_KEY, null);
+              setSession(null);
+              setUser(null);
+            } else if (userData) {
+              console.log('[AuthContext] Session restored successfully');
+              setSession(storedToken);
+              setUser(userData);
+            } else {
+              console.warn('[AuthContext] No user data with stored token');
+              await setStorageItemAsync(SESSION_KEY, null);
+              setSession(null);
+              setUser(null);
+            }
+          } else {
+            console.log('[AuthContext] No stored token found');
+            setSession(null);
+            setUser(null);
+          }
         }
-      } else if (nextAppState.match(/inactive|background/) && appState.current === 'active') {
-        // App has gone to the background
-        console.log('[AuthContext] App has gone to the background');
-        if (user) {
-          presenceService.markOffline(user.id).catch(err => {
-            console.error('[AuthContext] Error marking user offline on background:', err);
-          });
-        }
+      } catch (error) {
+        console.error('[AuthContext] Failed to load initial session:', error);
+        // Reset state on error
+        await setStorageItemAsync(SESSION_KEY, null);
+        setSession(null);
+        setUser(null);
+      } finally {
+        setIsLoading(false);
+        setIsInitialLoad(false);
       }
-      
-      appState.current = nextAppState;
-    });
-
-    // Clean up the subscriptions when unmounting
+    };
+    
+    loadInitialSession();
+    
+    // Cleanup subscription on unmount
     return () => {
-      console.log('[AuthContext] Cleaning up auth state change listener');
-      subscription.unsubscribe();
-      subscription2.remove();
-      cleanupPresence();
+      console.log('[AuthContext] Cleaning up auth listener');
+      subscription?.unsubscribe();
     };
   }, []);
-  
-  // Initialize presence tracking
-  const initializePresence = async (userId: string) => {
-    console.log('[AuthContext] Initializing presence for user:', userId);
-    
-    // Update presence immediately
-    try {
-      await presenceService.updatePresence(userId);
-    } catch (error) {
-      console.error('[AuthContext] Error initializing presence:', error);
-    }
-    
-    // Set up interval to update presence
-    if (presenceIntervalRef.current) {
-      clearInterval(presenceIntervalRef.current);
-    }
-    
-    presenceIntervalRef.current = setInterval(() => {
-      if (userId) {
-        presenceService.updatePresence(userId).catch(err => {
-          console.error('[AuthContext] Error updating presence in interval:', err);
-        });
-      }
-    }, 60000); // Update every minute
-  };
-  
-  // Clean up presence tracking
-  const cleanupPresence = () => {
-    console.log('[AuthContext] Cleaning up presence');
-    
-    if (presenceIntervalRef.current) {
-      clearInterval(presenceIntervalRef.current);
-      presenceIntervalRef.current = null;
-    }
-    
-    if (user?.id) {
-      presenceService.markOffline(user.id).catch(err => {
-        console.error('[AuthContext] Error marking user offline during cleanup:', err);
-      });
-    }
-  };
 
-  // Effect to handle navigation after sign out
+  // Handle routing based on authentication state
   useEffect(() => {
-    if (isSigningOut && !session && rootNavigationState?.key != null) {
-      // Router is ready and user is signed out, safe to navigate
-      try {
-        router.replace('/auth/login');
-        setIsSigningOut(false);
-      } catch (error) {
-        console.error('Navigation error during sign out:', error);
-        // If direct navigation fails, try a fallback
-        try {
-          router.replace('/splash');
-        } catch (fallbackError) {
-          console.error('Fallback navigation error:', fallbackError);
-        } finally {
-          setIsSigningOut(false);
-        }
-      }
+    // Only run navigation logic once loading is complete and router is ready
+    // Also skip if segments aren't stable yet (e.g., during initial transition)
+    if (isLoading || !isRouterReady || !segments || !Array.isArray(segments) || segments.length === 0) {
+      console.log('[AuthContext] Navigation effect skipped (loading, router not ready, or segments unstable)');
+      return;
     }
-  }, [isSigningOut, session, rootNavigationState?.key]);
 
-  // Sign in with email and password
+    const currentSegment = segments[0];
+    const inAuthGroup = currentSegment === 'auth';
+    // Ensure welcome/onboarding check is robust
+    const inWelcomeFlow = currentSegment === 'welcome' || currentSegment === 'onboarding'; 
+
+    console.log('[AuthContext] Running navigation check:', { 
+      session: !!session, 
+      inAuthGroup,
+      inWelcomeFlow,
+      currentSegment,
+      segments
+    });
+
+    try {
+      // User is logged in, but on an auth page (login/register) -> Redirect to home
+      if (session && inAuthGroup) {
+        console.log('[AuthContext] User signed in, but on auth page. Redirecting to /');
+        // Wrap in setTimeout to defer navigation slightly
+        setTimeout(() => router.replace('/'), 0);
+      } 
+      // User is logged out, AND not on an auth page, AND not in the welcome/onboarding flow -> Redirect to welcome
+      else if (!session && !inAuthGroup && !inWelcomeFlow) {
+        console.log('[AuthContext] User not signed in and not on auth/welcome/onboarding. Redirecting to /welcome');
+        // Wrap in setTimeout to defer navigation slightly
+        setTimeout(() => router.replace('/welcome'), 0);
+      } 
+      // All other cases: User is logged in and on a non-auth page,
+      // OR User is logged out and on auth/welcome/onboarding page. -> Do nothing.
+      else {
+         console.log('[AuthContext] No navigation needed.');
+      }
+    } catch (error) {
+      console.error('[AuthContext] Navigation error:', error);
+      // Avoid potential loops caused by errors during navigation attempts
+    }
+    // Depend only on the core state affecting navigation: session and segments.
+    // isLoading and isRouterReady act as guards within the effect.
+  }, [session, segments, isLoading, isRouterReady]); // Keep guards in deps to re-run when they become ready
+
+  // Update the authentication methods
   const signIn = async (email: string, password: string) => {
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      console.log('[AuthContext] Signing in with email and password');
+      const result = await signInWithEmail(email, password);
       
-      return { error };
+      if (result.success && result.session) {
+        console.log('[AuthContext] Sign in successful');
+        await setStorageItemAsync(SESSION_KEY, result.session.access_token);
+        setSession(result.session.access_token);
+        setUser(result.user || null);
+        return { success: true };
+      }
+      
+      return { 
+        success: false, 
+        error: result.error || new Error('Sign in failed') 
+      };
     } catch (error) {
-      console.error('Sign in error:', error);
-      return { error: error as Error };
+      console.error('[AuthContext] Failed to sign in:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error : new Error('Unknown error during sign in') 
+      };
     }
   };
 
-  // Sign up with email and password
-  const signUp = async (email: string, password: string, data?: object) => {
+  const signUp = async (email: string, password: string, metadata?: any) => {
     try {
-      console.log('AuthContext: Starting signup process with email:', email);
+      console.log('[AuthContext] Creating new account');
+      const result = await signUpWithEmail(email, password, { metadata });
       
-      // Make the Supabase auth call
-      const response = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data,
-        },
-      });
-      
-      const { data: authData, error } = response;
-      
-      // Log the response but not expose sensitive data
-      console.log('AuthContext: Signup response:', {
-        success: !!authData && !!authData.user,
-        userId: authData?.user?.id,
-        hasError: !!error,
-        errorMessage: error?.message,
-        statusCode: error?.status
-      });
-
-      // If there's an error, provide more details
-      if (error) {
-        console.error('AuthContext: Detailed signup error:', {
-          message: error.message,
-          status: error.status,
-          name: error.name,
-          code: error.code,
-          details: error.details,
-        });
-      }
-
-      return { user: authData?.user || null, error };
-    } catch (error: any) {
-      console.error('AuthContext: Signup catch block error:', {
-        message: error.message,
-        name: error.name,
-        code: error.code || 'N/A',
-        stack: error.stack ? 'Has stack trace' : 'No stack trace'
-      });
-      
-      // Check if this is a network error
-      if (error.message && (
-        error.message.includes('NetworkError') ||
-        error.message.includes('Failed to fetch') ||
-        error.message.includes('Network request failed')
-      )) {
+      if (result.success) {
+        // If session is returned immediately (email confirmation not required)
+        if (result.session) {
+          await setStorageItemAsync(SESSION_KEY, result.session.access_token);
+          setSession(result.session.access_token);
+          setUser(result.user || null);
+        }
+        
         return { 
-          user: null, 
-          error: new Error('Network error. Please check your internet connection and try again.') 
+          success: true, 
+          confirmationRequired: result.confirmationRequired
         };
       }
       
-      return { user: null, error: error as Error };
+      return { 
+        success: false, 
+        error: result.error || new Error('Sign up failed')
+      };
+    } catch (error) {
+      console.error('[AuthContext] Failed to sign up:', error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error : new Error('Unknown error during sign up')
+      };
     }
   };
 
-  // Sign out
   const signOut = async () => {
     try {
-      // Mark user as offline before signing out
-      if (user?.id) {
-        await presenceService.markOffline(user.id);
+      console.log('[AuthContext] Signing out');
+      // Use the ExpoAuthSession signOut function
+      const result = await expoSignOut();
+      
+      if (!result.success) {
+        console.error('[AuthContext] Supabase sign out error:', result.error);
       }
       
-      setIsSigningOut(true);
-      await supabase.auth.signOut();
-      // Navigation will be handled by the effect above
+      // Always clear our local session state, even if Supabase sign out fails
+      await setStorageItemAsync(SESSION_KEY, null);
+      setSession(null);
+      setUser(null);
     } catch (error) {
-      console.error('Sign out error:', error);
-      setIsSigningOut(false);
+      console.error('[AuthContext] Failed to sign out:', error);
+      // Still clear local state even if there's an error
+      await setStorageItemAsync(SESSION_KEY, null);
+      setSession(null);
+      setUser(null);
     }
   };
 
-  // Reset password
-  const resetPassword = async (email: string) => {
+  // Add a refresh token function
+  const refreshToken = async () => {
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: 'https://yourapp.com/reset-password', // Replace with your actual reset password URL
-      });
+      console.log('[AuthContext] Refreshing authentication token');
+      const result = await refreshSession();
       
-      return { error };
+      if (result.success && result.session) {
+        console.log('[AuthContext] Token refresh successful');
+        await setStorageItemAsync(SESSION_KEY, result.session.access_token);
+        setSession(result.session.access_token);
+        setUser(result.user || null);
+        return true;
+      }
+      
+      console.error('[AuthContext] Token refresh failed:', result.error);
+      return false;
     } catch (error) {
-      console.error('Reset password error:', error);
-      return { error: error as Error };
+      console.error('[AuthContext] Error during token refresh:', error);
+      return false;
     }
   };
 
-  // Show a loading screen while the auth state is being fetched
-  if (loading) {
-    console.log('[AuthContext] Still loading, showing loading indicator');
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#FF6B6B" />
-      </View>
-    );
-  }
-
-  console.log('[AuthContext] Rendering AuthProvider with context value', { hasSession: !!session, hasUser: !!user });
-  // Provide the auth context value to children components
+  // Provide the authentication context to children
   return (
-    <AuthContext.Provider
-      value={{
-        session,
-        user,
-        loading,
-        signIn,
-        signUp,
-        signOut,
-        resetPassword,
-      }}
-    >
+    <AuthContext.Provider value={{ 
+      signIn, 
+      signUp,
+      signOut, 
+      refreshToken,
+      session, 
+      isLoading, 
+      user,
+    }}>
       {children}
     </AuthContext.Provider>
   );
 }
 
-// Custom hook to use the auth context
+// Hook to use the auth context
 export function useAuth() {
-  console.log('[AuthContext] useAuth hook called');
   const context = useContext(AuthContext);
   
-  if (context === undefined) {
-    console.error('[AuthContext] useAuth hook used outside of AuthProvider');
+  if (!context) {
     throw new Error('useAuth must be used within an AuthProvider');
   }
   
-  console.log('[AuthContext] useAuth hook returning context', { hasSession: !!context.session, hasUser: !!context.user });
   return context;
-}
-
-const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#F2F2F7',
-  },
-}); 
+} 

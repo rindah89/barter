@@ -1,9 +1,12 @@
 /**
  * ExpoRouterFix.tsx
  * This file contains fixes for Expo Router error handling
+ * Enhanced based on insights from https://github.com/expo/router/issues/349
  */
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { ErrorBoundary } from 'expo-router';
 import { ErrorBoundaryFallback } from './ErrorUtils';
 
 // This function should be called before rendering the app
@@ -93,6 +96,9 @@ export function applyExpoRouterFix() {
       // Patch internal router objects
       patchErrorHandlers(expoRouter);
       patchErrorHandlers(expoRouter.internal);
+      
+      // Specifically patch the router hooks that were mentioned in the GitHub issue
+      patchRouterHooks(expoRouter);
     } catch (err) {
       console.warn('[ExpoRouterFix] Failed to patch internal router methods:', err);
     }
@@ -105,33 +111,268 @@ export function applyExpoRouterFix() {
   }
 }
 
-// Safe wrapper for Expo Router's ErrorBoundary
-export function SafeErrorBoundary({ children, fallback }: { children: React.ReactNode, fallback?: (props: any) => React.ReactNode }) {
+// Patch specific router hooks that are known to cause issues
+function patchRouterHooks(expoRouter: any) {
   try {
-    const expoRouter = require('expo-router');
-    const ErrorBoundary = expoRouter.ErrorBoundary;
+    // Patch useLocation hook - mentioned in the GitHub issue
+    if (expoRouter.useLocation) {
+      const originalUseLocation = expoRouter.useLocation;
+      expoRouter.useLocation = function() {
+        try {
+          const location = originalUseLocation.apply(this, arguments);
+          
+          // Ensure location has required properties
+          if (!location) {
+            console.warn('[ExpoRouterFix] useLocation returned undefined, providing fallback');
+            return { pathname: '/', params: {}, state: {} };
+          }
+          
+          // Ensure type property exists (mentioned in issue #349)
+          if (location && !location.type) {
+            location.type = 'unknown';
+          }
+          
+          return location;
+        } catch (e) {
+          console.warn('[ExpoRouterFix] Error in useLocation, providing fallback:', e);
+          return { pathname: '/', params: {}, state: {} };
+        }
+      };
+    }
     
-    // Create a safe fallback that handles undefined errors
-    const safeFallback = (props: any) => {
-      // Ensure we have a valid error object
-      const error = props.error || new Error('Unknown error in SafeErrorBoundary');
-      
-      // If a custom fallback is provided, use it with our safe error
-      if (fallback) {
-        return fallback({ ...props, error });
-      }
-      
-      // Otherwise use our default fallback
-      return <ErrorBoundaryFallback error={error} />;
-    };
+    // Patch useSegments hook - mentioned by Jukizuka in the issue
+    if (expoRouter.useSegments) {
+      const originalUseSegments = expoRouter.useSegments;
+      expoRouter.useSegments = function() {
+        try {
+          const segments = originalUseSegments.apply(this, arguments);
+          
+          // Ensure segments is an array
+          if (!segments) {
+            console.warn('[ExpoRouterFix] useSegments returned undefined, providing fallback');
+            return [];
+          }
+          
+          return segments;
+        } catch (e) {
+          console.warn('[ExpoRouterFix] Error in useSegments, providing fallback:', e);
+          return [];
+        }
+      };
+    }
     
-    return (
-      <ErrorBoundary fallback={safeFallback}>
-        {children}
-      </ErrorBoundary>
-    );
-  } catch (error) {
-    console.error('[SafeErrorBoundary] Failed to create safe error boundary:', error);
-    return <>{children}</>;
+    // Patch useRouteInfo hook - mentioned by trtin in the issue
+    if (expoRouter.useRouteInfo) {
+      const originalUseRouteInfo = expoRouter.useRouteInfo;
+      expoRouter.useRouteInfo = function() {
+        try {
+          const routeInfo = originalUseRouteInfo.apply(this, arguments);
+          
+          // Ensure routeInfo has required properties
+          if (!routeInfo) {
+            console.warn('[ExpoRouterFix] useRouteInfo returned undefined, providing fallback');
+            return { name: 'unknown', params: {} };
+          }
+          
+          return routeInfo;
+        } catch (e) {
+          console.warn('[ExpoRouterFix] Error in useRouteInfo, providing fallback:', e);
+          return { name: 'unknown', params: {} };
+        }
+      };
+    }
+    
+    // Patch useRootNavigationState hook - mentioned in various comments
+    if (expoRouter.useRootNavigationState) {
+      const originalUseRootNavigationState = expoRouter.useRootNavigationState;
+      expoRouter.useRootNavigationState = function() {
+        try {
+          const state = originalUseRootNavigationState.apply(this, arguments);
+          
+          // Return the state even if undefined - this is expected during initialization
+          return state;
+        } catch (e) {
+          console.warn('[ExpoRouterFix] Error in useRootNavigationState:', e);
+          return undefined;
+        }
+      };
+    }
+    
+    console.log('[ExpoRouterFix] Successfully patched router hooks');
+  } catch (e) {
+    console.warn('[ExpoRouterFix] Failed to patch router hooks:', e);
   }
 }
+
+/**
+ * A special version of ErrorBoundary that wraps Expo Router's ErrorBoundary
+ * and adds extra safeguards to prevent propagation of errors from internal error handling
+ */
+export function SafeErrorBoundary({ 
+  children, 
+  onError 
+}: { 
+  children: React.ReactNode, 
+  onError?: (error: Error) => void 
+}) {
+  return (
+    <SuperSafeErrorBoundary onError={onError}>
+      {children}
+    </SuperSafeErrorBoundary>
+  );
+}
+
+class SuperSafeErrorBoundary extends React.Component<
+  {
+    children: React.ReactNode; 
+    onError?: (error: Error) => void;
+  }, 
+  {
+    hasError: boolean; 
+    error: Error | null;
+  }
+> {
+  constructor(props: {children: React.ReactNode; onError?: (error: Error) => void;}) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('SuperSafeErrorBoundary caught an error:', error);
+    console.error('Component stack:', errorInfo.componentStack);
+    
+    // Call onError prop if provided
+    if (this.props.onError) {
+      try {
+        this.props.onError(error);
+      } catch (e) {
+        console.error('Error in onError callback:', e);
+      }
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={styles.container}>
+          <Text style={styles.title}>Something went wrong in the error boundary</Text>
+          <Text style={styles.message}>
+            {this.state.error ? this.state.error.message : 'Unknown error'}
+          </Text>
+        </View>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+/**
+ * Debug version of StandardErrorView that helps trace the issue
+ * This component is meant to be dynamically injected into Expo Router
+ */
+export function DebugStandardErrorView(props: any) {
+  const [callStack, setCallStack] = useState<string>('');
+  const [errorProps, setErrorProps] = useState<any>(null);
+  
+  useEffect(() => {
+    try {
+      // Create a new error to capture the current stack trace
+      const stackError = new Error('Debug stack trace');
+      setCallStack(stackError.stack || 'No stack available');
+      
+      // Log details about the props
+      console.log('[DebugStandardErrorView] Received props:', JSON.stringify(props, null, 2));
+      setErrorProps(props);
+      
+      // Analyze the error prop specifically
+      if (props && 'error' in props) {
+        console.log('[DebugStandardErrorView] Error prop is present');
+        
+        if (props.error === undefined) {
+          console.log('[DebugStandardErrorView] Error prop is undefined');
+        } else if (props.error === null) {
+          console.log('[DebugStandardErrorView] Error prop is null');
+        } else {
+          console.log('[DebugStandardErrorView] Error prop type:', typeof props.error);
+          console.log('[DebugStandardErrorView] Error prop constructor:', props.error.constructor?.name);
+          console.log('[DebugStandardErrorView] Error prop keys:', Object.keys(props.error));
+          
+          // Specifically check for message property
+          if ('message' in props.error) {
+            console.log('[DebugStandardErrorView] Message property exists:', props.error.message);
+          } else {
+            console.log('[DebugStandardErrorView] Message property does not exist on error object');
+          }
+        }
+      } else {
+        console.log('[DebugStandardErrorView] No error prop found in props');
+      }
+    } catch (e) {
+      console.error('[DebugStandardErrorView] Error in debugging code:', e);
+    }
+  }, [props]);
+  
+  // Render a simple view with debug info instead of trying to use the actual error
+  return (
+    <ScrollView style={styles.container}>
+      <Text style={styles.title}>Debug Error View</Text>
+      
+      <Text style={styles.subtitle}>Component Call Stack:</Text>
+      <Text style={styles.code}>{callStack}</Text>
+      
+      <Text style={styles.subtitle}>Props Received:</Text>
+      <Text style={styles.code}>
+        {errorProps ? JSON.stringify(errorProps, (key, value) => {
+          if (value === undefined) return 'undefined';
+          if (value === null) return 'null';
+          if (typeof value === 'function') return '[Function]';
+          if (typeof value === 'object' && value !== null) {
+            if (key === '') return value; // Don't modify the root object
+            // For non-root objects, convert to a simplified representation
+            return Object.keys(value).reduce((acc: any, k) => {
+              acc[k] = typeof value[k];
+              return acc;
+            }, {});
+          }
+          return value;
+        }, 2) : 'No props data'}
+      </Text>
+    </ScrollView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: 20,
+    backgroundColor: '#f8f9fa',
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#e74c3c',
+    marginBottom: 16,
+  },
+  subtitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  message: {
+    fontSize: 16,
+    marginBottom: 16,
+  },
+  code: {
+    fontFamily: 'monospace',
+    backgroundColor: '#f0f0f0',
+    padding: 12,
+    borderRadius: 4,
+    fontSize: 12,
+  },
+});

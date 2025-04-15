@@ -2,6 +2,8 @@ import React, { useEffect } from 'react';
 import { Redirect } from 'expo-router';
 import { fixErrorHandling } from '../lib/ErrorFix';
 import { applyExpoRouterFix } from '../lib/ExpoRouterFix';
+import { useAuth } from '../lib/AuthContext';
+import { View, ActivityIndicator, StyleSheet, Text } from 'react-native';
 
 // Apply error handling fixes immediately
 if (typeof global !== 'undefined') {
@@ -40,10 +42,42 @@ if (typeof global !== 'undefined') {
 }
 
 export default function Index() {
-  useEffect(() => {
-    console.log('[Index] Rendering index page');
-  }, []);
+  const { isLoading, user } = useAuth();
   
-  // Redirect to the main page or splash screen
-  return <Redirect href="/splash" />;
+  useEffect(() => {
+    console.log('[Index] Rendering index page, auth status:', { isLoading, isAuthenticated: !!user });
+  }, [isLoading, user]);
+  
+  // Show loading screen while checking authentication
+  if (isLoading) {
+    return (
+      <View style={styles.container}>
+        <ActivityIndicator size="large" color="#22C55E" />
+        <Text style={styles.text}>Loading...</Text>
+      </View>
+    );
+  }
+  
+  // Redirect based on authentication status
+  if (user) {
+    // User is authenticated, go to main app
+    return <Redirect href="/splash" />;
+  } else {
+    // User is not authenticated, go to welcome screen
+    return <Redirect href="/welcome" />;
+  }
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  text: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#333',
+  },
+});
